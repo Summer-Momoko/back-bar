@@ -2,7 +2,7 @@ import bcrypt from "bcryptjs";
 import connectPgSimple from "connect-pg-simple";
 import express, { type NextFunction, type Request, type Response } from "express";
 import session from "express-session";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, exists, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
 import { createServer as createHttpServer } from "node:http";
 import { join, resolve } from "node:path";
 import { createServer as createViteServer } from "vite";
@@ -282,6 +282,54 @@ app.get("/api/cocktails", requireUser, async (req, res, next) => {
   try {
     const userId = req.session.userId!;
     const starredOnly = req.query.starred === "true";
+    const rawSearch = req.query.search;
+    const rawBaseSpirit = req.query.baseSpirit;
+    const rawSort = req.query.sort;
+    if (rawSearch !== undefined && typeof rawSearch !== "string") {
+      res.status(400).json({ error: "Search must be a single text value." });
+      return;
+    }
+    if (rawBaseSpirit !== undefined && typeof rawBaseSpirit !== "string") {
+      res.status(400).json({ error: "Choose one base spirit." });
+      return;
+    }
+    const baseSpirit = typeof rawBaseSpirit === "string" && rawBaseSpirit !== "all" ? rawBaseSpirit : "";
+    if (baseSpirit && !BASE_SPIRITS.has(baseSpirit)) {
+      res.status(400).json({ error: "Choose a valid base spirit." });
+      return;
+    }
+    const sort = rawSort === undefined ? "newest" : rawSort;
+    if (typeof sort !== "string" || !["newest", "rating", "name"].includes(sort)) {
+      res.status(400).json({ error: "Choose a valid recipe sort order." });
+      return;
+    }
+
+    const conditions: SQL[] = [eq(cocktails.userId, userId)];
+    if (starredOnly) conditions.push(eq(stars.userId, userId));
+    if (baseSpirit) conditions.push(eq(cocktails.baseSpirit, baseSpirit));
+    const search = typeof rawSearch === "string" ? rawSearch.trim() : "";
+    if (search) {
+      const pattern = `%${search.replace(/[\\%_]/g, "\\$&")}%`;
+      const matchingIngredient = db
+        .select({ id: cocktailIngredients.id })
+        .from(cocktailIngredients)
+        .innerJoin(ingredients, eq(ingredients.id, cocktailIngredients.ingredientId))
+        .where(and(
+          eq(cocktailIngredients.cocktailId, cocktails.id),
+          ilike(ingredients.name, pattern),
+        ));
+      const matchingRecipe = or(
+        ilike(cocktails.name, pattern),
+        exists(matchingIngredient),
+      );
+      if (matchingRecipe) conditions.push(matchingRecipe);
+    }
+
+    const sortOrder = sort === "rating"
+      ? [desc(cocktails.rating), desc(cocktails.createdAt), asc(cocktails.id)]
+      : sort === "name"
+        ? [asc(sql`lower(${cocktails.name})`), asc(cocktails.id)]
+        : [desc(cocktails.createdAt), asc(cocktails.id)];
     const rows = await db
       .select({
         id: cocktails.id,
@@ -296,10 +344,8 @@ app.get("/api/cocktails", requireUser, async (req, res, next) => {
       .leftJoin(stars, and(eq(stars.cocktailId, cocktails.id), eq(stars.userId, userId)))
       .leftJoin(cocktailIngredients, eq(cocktailIngredients.cocktailId, cocktails.id))
       .leftJoin(ingredients, eq(ingredients.id, cocktailIngredients.ingredientId))
-      .where(starredOnly
-        ? and(eq(cocktails.userId, userId), eq(stars.userId, userId))
-        : eq(cocktails.userId, userId))
-      .orderBy(desc(cocktails.createdAt), asc(cocktails.id));
+      .where(and(...conditions))
+      .orderBy(...sortOrder);
 
     const summaries = new Map<
       number,

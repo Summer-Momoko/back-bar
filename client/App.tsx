@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
+import RecipeApp from "./recipes/RecipeApp.js";
 
 type User = { id: number; displayName: string };
 type Mode = "login" | "signup";
@@ -44,33 +45,15 @@ export default function App() {
 
   if (user) {
     return (
-      <div className="app-shell">
-        <header className="topbar">
-          <a className="brand" href="/" aria-label="Back Bar home">back bar<span>.</span></a>
-          <div className="account">
-            <span>{user.displayName}'s Bar</span>
-            <button
-              className="text-button"
-              onClick={async () => {
-                try {
-                  await request("/api/auth/logout", { method: "POST" });
-                  setUser(null);
-                  setMode("login");
-                } catch (error) {
-                  setLoadError((error as Error).message);
-                }
-              }}
-            >
-              Log out
-            </button>
-          </div>
-        </header>
-        <main className="welcome">
-          <p className="eyebrow">YOUR PERSONAL RECIPE BOX</p>
-          <h1>Welcome to your bar, {user.displayName}.</h1>
-          <p>Your account is ready. Your cocktail collection will live here.</p>
-        </main>
-      </div>
+      <RecipeApp
+        displayName={user.displayName}
+        onLogout={async () => {
+          await request("/api/auth/logout", { method: "POST" });
+          window.history.replaceState({}, "", "/");
+          setUser(null);
+          setMode("login");
+        }}
+      />
     );
   }
 

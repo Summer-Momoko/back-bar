@@ -9,7 +9,7 @@ import { createServer as createViteServer } from "vite";
 import { db, pool } from "../db/index.js";
 import { barItems, cocktailIngredients, cocktails, ingredients, stars, users } from "../db/schema.js";
 
-const app = express();
+export const app = express();
 const port = Number(process.env.PORT ?? 5000);
 const httpServer = createHttpServer(app);
 const sessionSecret = process.env.SESSION_SECRET;
@@ -857,27 +857,29 @@ app.use("/api", requireUser, (_req, res) => {
 });
 
 let closeVite: (() => Promise<void>) | undefined;
-if (process.env.NODE_ENV === "production") {
-  const clientDist = resolve(process.cwd(), "dist/client");
-  app.use(express.static(clientDist));
-  app.use((req, res, next) => {
-    if (req.method !== "GET" || req.path === "/api" || req.path.startsWith("/api/")) {
-      next();
-      return;
-    }
-    res.sendFile(join(clientDist, "index.html"));
-  });
-} else {
-  const vite = await createViteServer({
-    configFile: "./vite.config.ts",
-    server: {
-      middlewareMode: true,
-      allowedHosts: true,
-      ws: { server: httpServer },
-    },
-  });
-  closeVite = () => vite.close();
-  app.use(vite.middlewares);
+if (process.env.NODE_ENV !== "test") {
+  if (process.env.NODE_ENV === "production") {
+    const clientDist = resolve(process.cwd(), "dist/client");
+    app.use(express.static(clientDist));
+    app.use((req, res, next) => {
+      if (req.method !== "GET" || req.path === "/api" || req.path.startsWith("/api/")) {
+        next();
+        return;
+      }
+      res.sendFile(join(clientDist, "index.html"));
+    });
+  } else {
+    const vite = await createViteServer({
+      configFile: "./vite.config.ts",
+      server: {
+        middlewareMode: true,
+        allowedHosts: true,
+        ws: { server: httpServer },
+      },
+    });
+    closeVite = () => vite.close();
+    app.use(vite.middlewares);
+  }
 }
 
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
@@ -885,14 +887,18 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   res.status(500).json({ error: "Something went wrong. Please try again." });
 });
 
-const server = httpServer.listen(port, "0.0.0.0", () => {
-  console.log(`Back Bar running on port ${port}.`);
-});
+const server = process.env.NODE_ENV === "test"
+  ? undefined
+  : httpServer.listen(port, "0.0.0.0", () => {
+    console.log(`Back Bar running on port ${port}.`);
+  });
 
 async function shutdown() {
-  server.close();
+  server?.close();
   await closeVite?.();
   await pool.end();
 }
-process.on("SIGTERM", shutdown);
-process.on("SIGINT", shutdown);
+if (server) {
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
+}

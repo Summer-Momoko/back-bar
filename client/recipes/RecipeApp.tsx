@@ -1,17 +1,28 @@
 import { FormEvent, useEffect, useState } from "react";
 import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import {
   ApiRequestError,
   Cocktail,
   CocktailFieldErrors,
   CocktailInput,
   CocktailSort,
   CocktailSummary,
+  DashboardStats,
   IngredientRowFieldErrors,
   Ingredient,
   createCocktail,
   deleteCocktail,
   getCocktail,
   getCocktails,
+  getDashboardStats,
   getIngredients,
   setCocktailStar,
   updateCocktail,
@@ -20,6 +31,7 @@ import "./recipes.css";
 
 type RecipeRoute =
   | { page: "list"; starred?: boolean }
+  | { page: "dashboard" }
   | { page: "new" }
   | { page: "detail"; id: number }
   | { page: "edit"; id: number };
@@ -31,6 +43,7 @@ type RecipeAppProps = {
 
 function routeFromPath(pathname: string): RecipeRoute {
   if (pathname === "/starred" || pathname === "/starred/") return { page: "list", starred: true };
+  if (pathname === "/dashboard" || pathname === "/dashboard/") return { page: "dashboard" };
   if (pathname === "/cocktails/new") return { page: "new" };
   const match = pathname.match(/^\/cocktails\/(\d+)(\/edit)?\/?$/);
   if (match) {
@@ -42,6 +55,7 @@ function routeFromPath(pathname: string): RecipeRoute {
 
 function recipePath(route: RecipeRoute): string {
   if (route.page === "list") return route.starred ? "/starred" : "/";
+  if (route.page === "dashboard") return "/dashboard";
   if (route.page === "new") return "/cocktails/new";
   return `/cocktails/${route.id}${route.page === "edit" ? "/edit" : ""}`;
 }
@@ -89,6 +103,16 @@ export function RecipeApp({ displayName, onLogout }: RecipeAppProps) {
         >
           back bar<span>.</span>
         </a>
+        <nav className="recipe-header-nav" aria-label="Main navigation">
+          <a
+            aria-current={route.page === "dashboard" ? "page" : undefined}
+            className={route.page === "dashboard" ? "is-active" : ""}
+            href="/dashboard"
+            onClick={(event) => handleLink(event, { page: "dashboard" })}
+          >
+            Dashboard
+          </a>
+        </nav>
         <div className="recipe-account">
           <span>{displayName}&apos;s Bar</span>
           <button className="recipe-quiet-button" type="button" onClick={logout}>Log out</button>
@@ -103,6 +127,7 @@ export function RecipeApp({ displayName, onLogout }: RecipeAppProps) {
             handleLink={handleLink}
           />
         )}
+        {route.page === "dashboard" && <DashboardPage />}
         {route.page === "detail" && (
           <RecipeDetail id={route.id} navigate={navigate} handleLink={handleLink} />
         )}
@@ -110,6 +135,113 @@ export function RecipeApp({ displayName, onLogout }: RecipeAppProps) {
         {route.page === "edit" && <RecipeEditor mode="edit" id={route.id} navigate={navigate} />}
       </main>
     </div>
+  );
+}
+
+function DashboardPage() {
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [error, setError] = useState("");
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    setError("");
+    setStats(null);
+    getDashboardStats()
+      .then((result) => { if (active) setStats(result); })
+      .catch((caught: unknown) => {
+        if (active) {
+          setError(caught instanceof Error ? caught.message : "The dashboard could not be loaded.");
+        }
+      });
+    return () => { active = false; };
+  }, [reloadKey]);
+
+  const statCards = stats ? [
+    { label: "Total recipes", value: String(stats.totalRecipes) },
+    { label: "Average rating", value: stats.averageRating === null ? "—" : stats.averageRating.toFixed(1) },
+    { label: "Starred recipes", value: String(stats.starredRecipes) },
+    { label: "Can make now", value: String(stats.canMakeNow), accent: true },
+  ] : [];
+
+  return (
+    <section className="recipe-dashboard-page" aria-labelledby="dashboard-heading">
+      <div className="recipe-page-heading">
+        <div>
+          <p className="recipe-eyebrow">YOUR BAR AT A GLANCE</p>
+          <h1 id="dashboard-heading">Dashboard</h1>
+        </div>
+      </div>
+      {error ? (
+        <div className="recipe-message recipe-error" role="alert">
+          <p>{error}</p>
+          <button
+            className="recipe-text-action"
+            type="button"
+            onClick={() => setReloadKey((current) => current + 1)}
+          >
+            Try again
+          </button>
+        </div>
+      ) : stats === null ? (
+        <div className="recipe-skeleton dashboard-skeleton" aria-label="Loading dashboard" aria-live="polite">
+          <span /><span /><span /><span />
+        </div>
+      ) : (
+        <>
+          <div className="dashboard-stat-grid">
+            {statCards.map((card) => (
+              <article className={`dashboard-stat-card${card.accent ? " is-accent" : ""}`} key={card.label}>
+                <p>{card.label}</p>
+                <strong>{card.value}</strong>
+              </article>
+            ))}
+          </div>
+          <section className="dashboard-chart-section" aria-labelledby="dashboard-chart-heading">
+            <div className="dashboard-chart-heading">
+              <h2 id="dashboard-chart-heading">Recipes by base spirit</h2>
+            </div>
+            <div className="dashboard-chart-frame">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={stats.recipesByBaseSpirit} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+                  <CartesianGrid stroke="#ededea" vertical={false} />
+                  <XAxis
+                    axisLine={false}
+                    dataKey="baseSpirit"
+                    tick={{ fill: "#8a8a85", fontSize: 11 }}
+                    tickFormatter={(value: string) => value.charAt(0).toUpperCase() + value.slice(1)}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    allowDecimals={false}
+                    axisLine={false}
+                    tick={{ fill: "#8a8a85", fontSize: 11 }}
+                    tickLine={false}
+                    width={30}
+                  />
+                  <Tooltip
+                    cursor={{ fill: "#f7f8f6" }}
+                    contentStyle={{
+                      border: "1px solid #ededea",
+                      borderRadius: 4,
+                      boxShadow: "none",
+                      fontFamily: "Inter, sans-serif",
+                      fontSize: 12,
+                    }}
+                    formatter={(value) => [`${value ?? 0} recipes`, "Recipes"]}
+                    labelFormatter={(label) => {
+                      const spirit = String(label ?? "");
+                      return spirit.charAt(0).toUpperCase() + spirit.slice(1);
+                    }}
+                  />
+                  <Bar dataKey="count" fill="#5f7361" maxBarSize={50} radius={[3, 3, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </section>
+        </>
+      )}
+    </section>
   );
 }
 

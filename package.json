@@ -5,6 +5,8 @@
   "main": "server/index.ts",
   "scripts": {
     "dev": "tsx server/index.ts",
+    "build": "vite build --outDir dist/client && tsc -p tsconfig.server.json",
+    "start": "NODE_ENV=production node dist/server/index.js",
     "db:push": "drizzle-kit push",
     "db:seed": "tsx scripts/seed.ts",
     "typecheck": "tsc --noEmit"

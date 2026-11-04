@@ -4,6 +4,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import session from "express-session";
 import { eq } from "drizzle-orm";
 import { createServer as createHttpServer } from "node:http";
+import { join, resolve } from "node:path";
 import { createServer as createViteServer } from "vite";
 import { db, pool } from "../db/index.js";
 import { users } from "../db/schema.js";
@@ -165,20 +166,34 @@ app.use("/api", requireUser, (_req, res) => {
   res.status(404).json({ error: "Not found." });
 });
 
+let closeVite: (() => Promise<void>) | undefined;
+if (process.env.NODE_ENV === "production") {
+  const clientDist = resolve(process.cwd(), "dist/client");
+  app.use(express.static(clientDist));
+  app.use((req, res, next) => {
+    if (req.method !== "GET" || req.path === "/api" || req.path.startsWith("/api/")) {
+      next();
+      return;
+    }
+    res.sendFile(join(clientDist, "index.html"));
+  });
+} else {
+  const vite = await createViteServer({
+    configFile: "./vite.config.ts",
+    server: {
+      middlewareMode: true,
+      allowedHosts: true,
+      ws: { server: httpServer },
+    },
+  });
+  closeVite = () => vite.close();
+  app.use(vite.middlewares);
+}
+
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   console.error("Request failed:", error);
   res.status(500).json({ error: "Something went wrong. Please try again." });
 });
-
-const vite = await createViteServer({
-  configFile: "./vite.config.ts",
-  server: {
-    middlewareMode: true,
-    allowedHosts: true,
-    ws: { server: httpServer },
-  },
-});
-app.use(vite.middlewares);
 
 const server = httpServer.listen(port, "0.0.0.0", () => {
   console.log(`Back Bar running on port ${port}.`);
@@ -186,7 +201,7 @@ const server = httpServer.listen(port, "0.0.0.0", () => {
 
 async function shutdown() {
   server.close();
-  await vite.close();
+  await closeVite?.();
   await pool.end();
 }
 process.on("SIGTERM", shutdown);

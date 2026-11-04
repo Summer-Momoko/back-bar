@@ -21,6 +21,7 @@ import {
   Ingredient,
   MyBarData,
   MyBarIngredient,
+  OneAwayCocktailSummary,
   createCocktail,
   deleteCocktail,
   getCocktail,
@@ -299,8 +300,8 @@ function MyBarPage({
     return () => { active = false; };
   }, [reloadKey]);
 
-  async function toggleIngredient(ingredient: MyBarIngredient) {
-    const inBar = !ingredient.inBar;
+  async function saveIngredient(ingredient: MyBarIngredient, inBar: boolean) {
+    if (saving) return;
     setError("");
     setSaving(true);
     setBarData((current) => current && ({
@@ -314,6 +315,7 @@ function MyBarPage({
       setBarData((current) => current && ({
         ...current,
         makeableCocktails: result.makeableCocktails,
+        oneAwayCocktails: result.oneAwayCocktails,
       }));
     } catch (caught) {
       setBarData((current) => current && ({
@@ -326,6 +328,15 @@ function MyBarPage({
     } finally {
       setSaving(false);
     }
+  }
+
+  function toggleIngredient(ingredient: MyBarIngredient) {
+    void saveIngredient(ingredient, !ingredient.inBar);
+  }
+
+  function addMissingIngredient(ingredientId: number) {
+    const ingredient = barData?.ingredients.find((item) => item.id === ingredientId);
+    if (ingredient && !ingredient.inBar) void saveIngredient(ingredient, true);
   }
 
   const filteredIngredients = (barData?.ingredients ?? []).filter((ingredient) =>
@@ -429,6 +440,39 @@ function MyBarPage({
               </ul>
             ) : (
               <p className="my-bar-empty">Add ingredients to your bar to see which recipes you can make.</p>
+            )}
+          </section>
+          <section className="my-bar-one-away" aria-labelledby="one-away-heading">
+            <div className="my-bar-one-away-heading">
+              <div>
+                <p className="recipe-eyebrow">JUST ONE INGREDIENT TO GO</p>
+                <h2 id="one-away-heading">One bottle away</h2>
+              </div>
+            </div>
+            {barData.oneAwayCocktails.length > 0 ? (
+              <ul className="my-bar-one-away-list">
+                {barData.oneAwayCocktails.map((cocktail: OneAwayCocktailSummary) => (
+                  <li key={cocktail.id}>
+                    <a
+                      href={`/cocktails/${cocktail.id}`}
+                      onClick={(event) => handleLink(event, { page: "detail", id: cocktail.id })}
+                    >
+                      {cocktail.name}
+                    </a>
+                    <span className="my-bar-missing-ingredient">— missing {cocktail.missingIngredientName}</span>
+                    <button
+                      className="my-bar-got-it"
+                      disabled={saving}
+                      type="button"
+                      onClick={() => addMissingIngredient(cocktail.missingIngredientId)}
+                    >
+                      Got it
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="my-bar-empty">No recipes are one ingredient away.</p>
             )}
           </section>
         </>

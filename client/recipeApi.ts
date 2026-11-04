@@ -59,9 +59,18 @@ export type MakeableCocktailSummary = {
   ingredients: Array<{ ingredientId: number; name: string }>;
 };
 
+export type OneAwayCocktailSummary = {
+  id: number;
+  name: string;
+  baseSpirit: string;
+  missingIngredientId: number;
+  missingIngredientName: string;
+};
+
 export type MyBarData = {
   ingredients: MyBarIngredient[];
   makeableCocktails: MakeableCocktailSummary[];
+  oneAwayCocktails: OneAwayCocktailSummary[];
 };
 
 export type CocktailInput = {
@@ -182,7 +191,11 @@ export async function getMyBar(): Promise<MyBarData> {
 export async function setBarItem(
   ingredientId: number,
   inBar: boolean,
-): Promise<{ inBar: boolean; makeableCocktails: MakeableCocktailSummary[] }> {
+): Promise<{
+  inBar: boolean;
+  makeableCocktails: MakeableCocktailSummary[];
+  oneAwayCocktails: OneAwayCocktailSummary[];
+}> {
   return apiRequest(`/api/my-bar/${ingredientId}`, {
     method: "PUT",
     body: JSON.stringify({ inBar }),

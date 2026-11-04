@@ -40,6 +40,33 @@ export type CocktailInput = {
   ingredients: Array<{ ingredientId: number; amount: string }>;
 };
 
+export type IngredientRowFieldErrors = {
+  ingredientId?: string;
+  amount?: string;
+};
+
+export type CocktailFieldErrors = {
+  name?: string;
+  baseSpirit?: string;
+  glass?: string;
+  method?: string;
+  rating?: string;
+  notes?: string;
+  ingredients?: string;
+  ingredientRows?: IngredientRowFieldErrors[];
+};
+
+export class ApiRequestError extends Error {
+  constructor(
+    message: string,
+    readonly fieldErrors?: CocktailFieldErrors,
+    readonly status?: number,
+  ) {
+    super(message);
+    this.name = "ApiRequestError";
+  }
+}
+
 async function apiRequest<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...options,
@@ -48,8 +75,15 @@ async function apiRequest<T>(path: string, options?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    const payload = (await response.json().catch(() => ({}))) as { error?: string };
-    throw new Error(payload.error ?? "Something went wrong. Please try again.");
+    const payload = (await response.json().catch(() => ({}))) as {
+      error?: string;
+      fieldErrors?: CocktailFieldErrors;
+    };
+    throw new ApiRequestError(
+      payload.error ?? "Something went wrong. Please try again.",
+      payload.fieldErrors,
+      response.status,
+    );
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;

@@ -1,8 +1,11 @@
 import { FormEvent, useEffect, useState } from "react";
 import {
+  ApiRequestError,
   Cocktail,
+  CocktailFieldErrors,
   CocktailInput,
   CocktailSummary,
+  IngredientRowFieldErrors,
   Ingredient,
   createCocktail,
   deleteCocktail,
@@ -285,16 +288,91 @@ function RecipeDetail({
 
 type IngredientRow = { ingredientId: number | null; amount: string; query: string };
 
-const emptyForm = {
+type RecipeFormFields = {
+  name: string;
+  baseSpirit: string;
+  glass: string;
+  method: string;
+  rating: number | "";
+  notes: string;
+};
+
+const emptyForm: RecipeFormFields = {
   name: "",
   baseSpirit: "",
   glass: "",
   method: "",
-  rating: 3,
+  rating: "",
   notes: "",
 };
 
 const baseSpirits = ["gin", "whiskey", "rum", "tequila", "vodka", "brandy", "other"];
+
+function validateRecipe(
+  fields: RecipeFormFields,
+  rows: IngredientRow[],
+  ingredients: Ingredient[],
+): CocktailFieldErrors {
+  const errors: CocktailFieldErrors = {};
+  const rowErrors: IngredientRowFieldErrors[] = Array.from({ length: rows.length }, () => ({}));
+  const ingredientIds = new Set<number>();
+
+  if (!fields.name.trim()) errors.name = "Give your drink a name";
+  else if (fields.name.trim().length > 160) errors.name = "Use 160 characters or fewer";
+  if (!baseSpirits.includes(fields.baseSpirit)) errors.baseSpirit = "Pick a base spirit";
+  if (!fields.glass.trim()) errors.glass = "Choose a glass";
+  else if (fields.glass.trim().length > 100) errors.glass = "Use 100 characters or fewer";
+  if (!fields.method.trim()) errors.method = "Add a method";
+  if (!Number.isInteger(Number(fields.rating)) || Number(fields.rating) < 1 || Number(fields.rating) > 5) {
+    errors.rating = "Choose a rating from 1 to 5";
+  }
+  if (fields.notes.length > 5000) errors.notes = "Use 5,000 characters or fewer";
+
+  let selectedCount = 0;
+  rows.forEach((row, index) => {
+    const ingredientId = row.ingredientId;
+    const hasIngredient = ingredientId !== null && ingredientId > 0;
+    const hasAmount = row.amount.trim().length > 0;
+    const hasQuery = row.query.trim().length > 0;
+    if (!hasIngredient && !hasAmount && !hasQuery) return;
+
+    if (ingredientId === null || ingredientId <= 0) {
+      rowErrors[index].ingredientId = "Choose an ingredient";
+      return;
+    }
+
+    selectedCount += 1;
+    if (!ingredients.some((ingredient) => ingredient.id === ingredientId)) {
+      rowErrors[index].ingredientId = "Choose an ingredient from the list";
+    }
+    if (ingredientIds.has(ingredientId)) {
+      rowErrors[index].ingredientId = "This ingredient is already listed";
+    }
+    ingredientIds.add(ingredientId);
+    if (!hasAmount) rowErrors[index].amount = "Enter an amount";
+    else if (row.amount.trim().length > 100) rowErrors[index].amount = "Use 100 characters or fewer";
+  });
+
+  if (!selectedCount) errors.ingredients = "Add at least one ingredient";
+  else if (selectedCount > 50) errors.ingredients = "Add no more than 50 ingredients";
+  if (rowErrors.some((rowError) => rowError.ingredientId || rowError.amount)) {
+    errors.ingredientRows = rowErrors;
+  }
+  return errors;
+}
+
+function hasRecipeErrors(errors: CocktailFieldErrors): boolean {
+  return Boolean(
+    errors.name ||
+    errors.baseSpirit ||
+    errors.glass ||
+    errors.method ||
+    errors.rating ||
+    errors.notes ||
+    errors.ingredients ||
+    errors.ingredientRows?.some((rowError) => rowError?.ingredientId || rowError?.amount),
+  );
+}
 
 function RecipeEditor({
   mode,
@@ -313,6 +391,8 @@ function RecipeEditor({
   const [error, setError] = useState("");
   const [loadError, setLoadError] = useState("");
   const [ingredientsError, setIngredientsError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<CocktailFieldErrors>({});
+  const [hasSubmitted, setHasSubmitted] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -350,26 +430,44 @@ function RecipeEditor({
     return () => { alive = false; };
   }, [mode, id]);
 
+  function updateField<K extends keyof RecipeFormFields>(field: K, value: RecipeFormFields[K]) {
+    const nextFields = { ...fields, [field]: value } as RecipeFormFields;
+    setFields(nextFields);
+    setError("");
+    if (hasSubmitted) setFieldErrors(validateRecipe(nextFields, rows, ingredients));
+  }
+
   function updateRow(index: number, patch: Partial<IngredientRow>) {
-    setRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, ...patch } : row));
+    const nextRows = rows.map((row, rowIndex) => rowIndex === index ? { ...row, ...patch } : row);
+    setRows(nextRows);
+    if (hasSubmitted) setFieldErrors(validateRecipe(fields, nextRows, ingredients));
   }
 
   function addRow() {
-    setRows((current) => [...current, { ingredientId: null, amount: "", query: "" }]);
+    const nextRows = [...rows, { ingredientId: null, amount: "", query: "" }];
+    setRows(nextRows);
+    if (hasSubmitted) setFieldErrors(validateRecipe(fields, nextRows, ingredients));
   }
 
   function removeRow(index: number) {
-    setRows((current) => current.length === 1
+    const nextRows = rows.length === 1
       ? [{ ingredientId: null, amount: "", query: "" }]
-      : current.filter((_, rowIndex) => rowIndex !== index));
+      : rows.filter((_, rowIndex) => rowIndex !== index);
+    setRows(nextRows);
+    if (hasSubmitted) setFieldErrors(validateRecipe(fields, nextRows, ingredients));
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
+    setHasSubmitted(true);
+    const clientErrors = validateRecipe(fields, rows, ingredients);
+    setFieldErrors(clientErrors);
+    if (hasRecipeErrors(clientErrors)) return;
+
     const input: CocktailInput = {
       ...fields,
-      rating: Number(fields.rating) || 0,
+      rating: Number(fields.rating),
       ingredients: rows
         .filter((row): row is IngredientRow & { ingredientId: number } => row.ingredientId !== null)
         .map(({ ingredientId, amount }) => ({ ingredientId, amount: amount.trim() })),
@@ -384,7 +482,11 @@ function RecipeEditor({
         navigate({ page: "detail", id });
       }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Your recipe could not be saved.");
+      if (caught instanceof ApiRequestError && caught.fieldErrors) {
+        setFieldErrors(caught.fieldErrors);
+      } else {
+        setError(caught instanceof Error ? caught.message : "Your recipe could not be saved.");
+      }
     } finally {
       setSaving(false);
     }
@@ -412,52 +514,76 @@ function RecipeEditor({
         <h1>{mode === "edit" ? "Edit recipe" : "Add a recipe"}</h1>
         <p>{mode === "edit" ? "Adjust the details for your home bar." : "Keep the details that make it worth making again."}</p>
       </div>
-      <form className="recipe-form" onSubmit={(event) => void submit(event)}>
+      <form className="recipe-form" noValidate onSubmit={(event) => void submit(event)}>
         <div className="recipe-form-grid">
           <label className="recipe-field recipe-field-wide">
             <span>Recipe name</span>
             <input
+              aria-describedby={fieldErrors.name ? "recipe-name-error" : undefined}
+              aria-invalid={Boolean(fieldErrors.name)}
               autoFocus
               maxLength={160}
-              onChange={(event) => setFields((current) => ({ ...current, name: event.target.value }))}
+              onChange={(event) => updateField("name", event.target.value)}
               placeholder="e.g. The Last Word"
               required
               value={fields.name}
             />
+            {fieldErrors.name && <small className="recipe-validation-message" id="recipe-name-error">{fieldErrors.name}</small>}
           </label>
           <label className="recipe-field">
             <span>Base spirit</span>
-            <select required value={fields.baseSpirit} onChange={(event) => setFields((current) => ({ ...current, baseSpirit: event.target.value }))}>
+            <select
+              aria-describedby={fieldErrors.baseSpirit ? "recipe-base-spirit-error" : undefined}
+              aria-invalid={Boolean(fieldErrors.baseSpirit)}
+              required
+              value={fields.baseSpirit}
+              onChange={(event) => updateField("baseSpirit", event.target.value)}
+            >
               <option value="">Choose a spirit</option>
               {baseSpirits.map((item) => <option key={item} value={item}>{item}</option>)}
             </select>
+            {fieldErrors.baseSpirit && <small className="recipe-validation-message" id="recipe-base-spirit-error">{fieldErrors.baseSpirit}</small>}
           </label>
           <label className="recipe-field">
             <span>Glass</span>
             <input
+              aria-describedby={fieldErrors.glass ? "recipe-glass-error" : undefined}
+              aria-invalid={Boolean(fieldErrors.glass)}
               maxLength={100}
-              onChange={(event) => setFields((current) => ({ ...current, glass: event.target.value }))}
+              onChange={(event) => updateField("glass", event.target.value)}
               placeholder="e.g. Coupe"
               required
               value={fields.glass}
             />
+            {fieldErrors.glass && <small className="recipe-validation-message" id="recipe-glass-error">{fieldErrors.glass}</small>}
           </label>
           <label className="recipe-field recipe-field-wide">
             <span>Method</span>
             <textarea
+              aria-describedby={fieldErrors.method ? "recipe-method-error" : undefined}
+              aria-invalid={Boolean(fieldErrors.method)}
               maxLength={5000}
-              onChange={(event) => setFields((current) => ({ ...current, method: event.target.value }))}
+              onChange={(event) => updateField("method", event.target.value)}
               placeholder="Describe how to make it"
               required
               rows={5}
               value={fields.method}
             />
+            {fieldErrors.method && <small className="recipe-validation-message" id="recipe-method-error">{fieldErrors.method}</small>}
           </label>
           <label className="recipe-field">
             <span>Rating</span>
-            <select required value={fields.rating} onChange={(event) => setFields((current) => ({ ...current, rating: Number(event.target.value) }))}>
+            <select
+              aria-describedby={fieldErrors.rating ? "recipe-rating-error" : undefined}
+              aria-invalid={Boolean(fieldErrors.rating)}
+              required
+              value={fields.rating}
+              onChange={(event) => updateField("rating", event.target.value === "" ? "" : Number(event.target.value))}
+            >
+              <option value="">Choose a rating</option>
               {[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value} / 5</option>)}
             </select>
+            {fieldErrors.rating && <small className="recipe-validation-message" id="recipe-rating-error">{fieldErrors.rating}</small>}
           </label>
         </div>
         <div className="recipe-form-section">
@@ -466,9 +592,11 @@ function RecipeEditor({
             <button className="recipe-text-action" type="button" onClick={addRow}>Add ingredient <span aria-hidden="true">+</span></button>
           </div>
           {ingredientsError && <p className="recipe-inline-error" role="alert">{ingredientsError}</p>}
+          {fieldErrors.ingredients && <p className="recipe-validation-message" id="recipe-ingredients-error">{fieldErrors.ingredients}</p>}
           {rows.map((row, index) => (
             <IngredientPicker
               key={index}
+              fieldErrors={fieldErrors.ingredientRows?.[index]}
               index={index}
               row={row}
               ingredients={ingredients.filter((item) =>
@@ -483,12 +611,15 @@ function RecipeEditor({
         <label className="recipe-field recipe-notes-field">
           <span>Notes <small>Optional</small></span>
           <textarea
+            aria-describedby={fieldErrors.notes ? "recipe-notes-error" : undefined}
+            aria-invalid={Boolean(fieldErrors.notes)}
             maxLength={5000}
-            onChange={(event) => setFields((current) => ({ ...current, notes: event.target.value }))}
+            onChange={(event) => updateField("notes", event.target.value)}
             placeholder="A small detail you want to remember…"
             rows={4}
             value={fields.notes}
           />
+          {fieldErrors.notes && <small className="recipe-validation-message" id="recipe-notes-error">{fieldErrors.notes}</small>}
         </label>
         {error && <p className="recipe-inline-error" role="alert">{error}</p>}
         <div className="recipe-form-actions">
@@ -508,6 +639,7 @@ function IngredientPicker({
   index,
   row,
   ingredients,
+  fieldErrors,
   onChange,
   onRemove,
   canRemove,
@@ -515,6 +647,7 @@ function IngredientPicker({
   index: number;
   row: IngredientRow;
   ingredients: Ingredient[];
+  fieldErrors?: IngredientRowFieldErrors;
   onChange: (patch: Partial<IngredientRow>) => void;
   onRemove: () => void;
   canRemove: boolean;
@@ -533,7 +666,9 @@ function IngredientPicker({
           <input
             aria-autocomplete="list"
             aria-controls={listId}
+            aria-describedby={fieldErrors?.ingredientId ? `ingredient-error-${index}` : undefined}
             aria-expanded={open}
+            aria-invalid={Boolean(fieldErrors?.ingredientId)}
             autoComplete="off"
             onBlur={() => window.setTimeout(() => setOpen(false), 120)}
             onChange={(event) => {
@@ -554,6 +689,9 @@ function IngredientPicker({
             required
             value={row.query}
           />
+          {fieldErrors?.ingredientId && (
+            <small className="recipe-validation-message" id={`ingredient-error-${index}`}>{fieldErrors.ingredientId}</small>
+          )}
         </label>
         {open && (
           <ul className="recipe-ingredient-options" id={listId} role="listbox" aria-label="Ingredient options">
@@ -579,12 +717,17 @@ function IngredientPicker({
       <label className="recipe-field recipe-amount-field">
         <span className="sr-only">Amount for ingredient {index + 1}</span>
         <input
-          maxLength={80}
+          aria-describedby={fieldErrors?.amount ? `amount-error-${index}` : undefined}
+          aria-invalid={Boolean(fieldErrors?.amount)}
+          maxLength={100}
           onChange={(event) => onChange({ amount: event.target.value })}
           placeholder="Amount"
           required
           value={row.amount}
         />
+        {fieldErrors?.amount && (
+          <small className="recipe-validation-message" id={`amount-error-${index}`}>{fieldErrors.amount}</small>
+        )}
       </label>
       <button
         aria-label={`Remove ingredient ${index + 1}`}

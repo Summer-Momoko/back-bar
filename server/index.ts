@@ -549,7 +549,7 @@ app.get("/api/cocktails", requireUser, async (req, res, next) => {
       return;
     }
 
-    const conditions: SQL[] = [eq(cocktails.userId, userId)];
+    const conditions: SQL[] = [];
     if (starredOnly) conditions.push(eq(stars.userId, userId));
     if (baseSpirit) conditions.push(eq(cocktails.baseSpirit, baseSpirit));
     const search = typeof rawSearch === "string" ? rawSearch.trim() : "";

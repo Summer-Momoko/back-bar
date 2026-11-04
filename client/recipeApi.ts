@@ -15,6 +15,7 @@ export type CocktailSummary = {
   name: string;
   baseSpirit: string;
   rating: number;
+  isStarred: boolean;
   ingredients: Array<{ ingredientId: number; name: string }>;
 };
 
@@ -27,6 +28,7 @@ export type Cocktail = {
   rating: number;
   notes: string;
   createdAt: string;
+  isStarred: boolean;
   ingredients: CocktailIngredient[];
 };
 
@@ -89,8 +91,9 @@ async function apiRequest<T>(path: string, options?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export async function getCocktails(): Promise<CocktailSummary[]> {
-  const result = await apiRequest<{ cocktails: CocktailSummary[] }>("/api/cocktails");
+export async function getCocktails(starredOnly = false): Promise<CocktailSummary[]> {
+  const path = starredOnly ? "/api/cocktails?starred=true" : "/api/cocktails";
+  const result = await apiRequest<{ cocktails: CocktailSummary[] }>(path);
   return result.cocktails;
 }
 
@@ -121,4 +124,11 @@ export async function updateCocktail(id: number, input: CocktailInput): Promise<
 
 export async function deleteCocktail(id: number): Promise<void> {
   await apiRequest(`/api/cocktails/${id}`, { method: "DELETE" });
+}
+
+export async function setCocktailStar(id: number, isStarred: boolean): Promise<void> {
+  await apiRequest(`/api/cocktails/${id}/star`, {
+    method: "PUT",
+    body: JSON.stringify({ isStarred }),
+  });
 }

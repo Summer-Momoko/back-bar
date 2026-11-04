@@ -7,7 +7,7 @@ import { createServer as createHttpServer } from "node:http";
 import { join, resolve } from "node:path";
 import { createServer as createViteServer } from "vite";
 import { db, pool } from "../db/index.js";
-import { cocktailIngredients, cocktails, ingredients, users } from "../db/schema.js";
+import { cocktailIngredients, cocktails, ingredients, stars, users } from "../db/schema.js";
 
 const app = express();
 const port = Number(process.env.PORT ?? 5000);
@@ -280,19 +280,25 @@ app.get("/api/ingredients", requireUser, async (_req, res, next) => {
 
 app.get("/api/cocktails", requireUser, async (req, res, next) => {
   try {
+    const userId = req.session.userId!;
+    const starredOnly = req.query.starred === "true";
     const rows = await db
       .select({
         id: cocktails.id,
         name: cocktails.name,
         baseSpirit: cocktails.baseSpirit,
         rating: cocktails.rating,
+        starredCocktailId: stars.cocktailId,
         ingredientId: cocktailIngredients.ingredientId,
         ingredientName: ingredients.name,
       })
       .from(cocktails)
+      .leftJoin(stars, and(eq(stars.cocktailId, cocktails.id), eq(stars.userId, userId)))
       .leftJoin(cocktailIngredients, eq(cocktailIngredients.cocktailId, cocktails.id))
       .leftJoin(ingredients, eq(ingredients.id, cocktailIngredients.ingredientId))
-      .where(eq(cocktails.userId, req.session.userId!))
+      .where(starredOnly
+        ? and(eq(cocktails.userId, userId), eq(stars.userId, userId))
+        : eq(cocktails.userId, userId))
       .orderBy(desc(cocktails.createdAt), asc(cocktails.id));
 
     const summaries = new Map<
@@ -302,6 +308,7 @@ app.get("/api/cocktails", requireUser, async (req, res, next) => {
         name: string;
         baseSpirit: string;
         rating: number;
+          isStarred: boolean;
         ingredients: Array<{ ingredientId: number; name: string }>;
       }
     >();
@@ -313,6 +320,7 @@ app.get("/api/cocktails", requireUser, async (req, res, next) => {
           name: row.name,
           baseSpirit: row.baseSpirit,
           rating: row.rating,
+          isStarred: row.starredCocktailId !== null,
           ingredients: [],
         };
         summaries.set(row.id, summary);
@@ -344,8 +352,13 @@ app.get("/api/cocktails/:id", requireUser, async (req, res, next) => {
         rating: cocktails.rating,
         notes: cocktails.notes,
         createdAt: cocktails.createdAt,
+        starredCocktailId: stars.cocktailId,
       })
       .from(cocktails)
+      .leftJoin(
+        stars,
+        and(eq(stars.cocktailId, cocktails.id), eq(stars.userId, req.session.userId!)),
+      )
       .where(and(eq(cocktails.id, id), eq(cocktails.userId, req.session.userId!)))
       .limit(1);
     if (!cocktail) {
@@ -363,7 +376,44 @@ app.get("/api/cocktails/:id", requireUser, async (req, res, next) => {
       .innerJoin(ingredients, eq(ingredients.id, cocktailIngredients.ingredientId))
       .where(eq(cocktailIngredients.cocktailId, id))
       .orderBy(asc(cocktailIngredients.id));
-    res.json({ cocktail: { ...cocktail, ingredients: rows } });
+    const { starredCocktailId, ...recipe } = cocktail;
+    res.json({ cocktail: { ...recipe, isStarred: starredCocktailId !== null, ingredients: rows } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/cocktails/:id/star", requireUser, async (req, res, next) => {
+  const id = parseCocktailId(req.params.id);
+  if (id === null) {
+    res.status(404).json({ error: "Recipe not found." });
+    return;
+  }
+  if (typeof req.body?.isStarred !== "boolean") {
+    res.status(400).json({ error: "Choose whether to star this recipe." });
+    return;
+  }
+
+  const userId = req.session.userId!;
+  try {
+    const [ownedCocktail] = await db
+      .select({ id: cocktails.id })
+      .from(cocktails)
+      .where(and(eq(cocktails.id, id), eq(cocktails.userId, userId)))
+      .limit(1);
+    if (!ownedCocktail) {
+      res.status(404).json({ error: "Recipe not found." });
+      return;
+    }
+
+    if (req.body.isStarred) {
+      await db.insert(stars).values({ userId, cocktailId: id }).onConflictDoNothing();
+    } else {
+      await db
+        .delete(stars)
+        .where(and(eq(stars.userId, userId), eq(stars.cocktailId, id)));
+    }
+    res.json({ isStarred: req.body.isStarred });
   } catch (error) {
     next(error);
   }

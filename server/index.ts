@@ -271,14 +271,18 @@ export type DashboardStats = {
 };
 
 export async function getDashboardStats(userId: number): Promise<DashboardStats> {
-  const [summaryRows, starredRows, spiritRows, makeableCocktails] = await Promise.all([
+  const [summaryRows, averageRows, starredRows, spiritRows, makeableCocktails] = await Promise.all([
     db
       .select({
         totalRecipes: sql<number>`count(*)::int`,
-        averageRating: sql<number | string | null>`avg(${cocktails.rating})`,
       })
       .from(cocktails)
       .where(eq(cocktails.userId, userId)),
+    db
+      .select({
+        averageRating: sql<number | string | null>`avg(${cocktails.rating})`,
+      })
+      .from(cocktails),
     db
       .select({ count: sql<number>`count(*)::int` })
       .from(stars)
@@ -300,9 +304,9 @@ export async function getDashboardStats(userId: number): Promise<DashboardStats>
 
   const summary = summaryRows[0];
   const totalRecipes = Number(summary?.totalRecipes ?? 0);
-  const averageRating = summary?.averageRating == null
+  const averageRating = averageRows[0]?.averageRating == null
     ? null
-    : Number(Number(summary.averageRating).toFixed(1));
+    : Number(Number(averageRows[0].averageRating).toFixed(1));
   const spiritCounts = new Map(spiritRows.map((row) => [row.baseSpirit, Number(row.count)]));
   const recipesByBaseSpirit = [...BASE_SPIRITS].map((baseSpirit) => ({
     baseSpirit,

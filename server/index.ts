@@ -54,6 +54,7 @@ function normalizedUsername(value: unknown): string | null {
 }
 
 const BASE_SPIRITS = new Set(["gin", "whiskey", "rum", "tequila", "vodka", "brandy", "other"]);
+const INGREDIENT_CATEGORIES = new Set(["spirit", "liqueur", "juice", "syrup", "bitters", "garnish", "other"]);
 
 type CocktailInput = {
   name: string;
@@ -518,6 +519,45 @@ app.get("/api/ingredients", requireUser, async (_req, res, next) => {
       .from(ingredients)
       .orderBy(asc(ingredients.name));
     res.json({ ingredients: rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/ingredients", requireUser, async (req, res, next) => {
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  const category = typeof req.body?.category === "string" ? req.body.category : "";
+  if (!name) {
+    res.status(400).json({ error: "Enter an ingredient name." });
+    return;
+  }
+  if (name.length > 120) {
+    res.status(400).json({ error: "Ingredient names must be 120 characters or fewer." });
+    return;
+  }
+  if (!INGREDIENT_CATEGORIES.has(category)) {
+    res.status(400).json({ error: "Choose an ingredient category." });
+    return;
+  }
+
+  try {
+    const result = await db.transaction(async (tx) => {
+      // Serialize same-name creates so concurrent requests cannot add case variants.
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(lower(${name})))`);
+      const [existing] = await tx
+        .select({ id: ingredients.id, name: ingredients.name, category: ingredients.category })
+        .from(ingredients)
+        .where(sql`lower(${ingredients.name}) = lower(${name})`)
+        .limit(1);
+      if (existing) return { ingredient: existing, created: false };
+
+      const [created] = await tx
+        .insert(ingredients)
+        .values({ name, category })
+        .returning({ id: ingredients.id, name: ingredients.name, category: ingredients.category });
+      return { ingredient: created, created: true };
+    });
+    res.status(result.created ? 201 : 200).json({ ingredient: result.ingredient });
   } catch (error) {
     next(error);
   }

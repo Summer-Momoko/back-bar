@@ -153,6 +153,14 @@ export async function getIngredients(): Promise<Ingredient[]> {
   return result.ingredients;
 }
 
+export async function createIngredient(name: string, category: string): Promise<Ingredient> {
+  const result = await apiRequest<{ ingredient: Ingredient }>("/api/ingredients", {
+    method: "POST",
+    body: JSON.stringify({ name, category }),
+  });
+  return result.ingredient;
+}
+
 export async function createCocktail(input: CocktailInput): Promise<number> {
   const result = await apiRequest<{ cocktail: { id: number } }>("/api/cocktails", {
     method: "POST",

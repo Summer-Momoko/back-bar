@@ -19,6 +19,15 @@ export type CocktailSummary = {
   ingredients: Array<{ ingredientId: number; name: string }>;
 };
 
+export type CocktailSort = "newest" | "rating" | "name";
+
+export type CocktailListFilters = {
+  starredOnly?: boolean;
+  search?: string;
+  baseSpirit?: string;
+  sort?: CocktailSort;
+};
+
 export type Cocktail = {
   id: number;
   name: string;
@@ -91,8 +100,13 @@ async function apiRequest<T>(path: string, options?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export async function getCocktails(starredOnly = false): Promise<CocktailSummary[]> {
-  const path = starredOnly ? "/api/cocktails?starred=true" : "/api/cocktails";
+export async function getCocktails(filters: CocktailListFilters = {}): Promise<CocktailSummary[]> {
+  const params = new URLSearchParams();
+  if (filters.starredOnly) params.set("starred", "true");
+  if (filters.search?.trim()) params.set("search", filters.search.trim());
+  if (filters.baseSpirit && filters.baseSpirit !== "all") params.set("baseSpirit", filters.baseSpirit);
+  params.set("sort", filters.sort ?? "newest");
+  const path = `/api/cocktails?${params.toString()}`;
   const result = await apiRequest<{ cocktails: CocktailSummary[] }>(path);
   return result.cocktails;
 }

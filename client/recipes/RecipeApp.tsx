@@ -4,6 +4,7 @@ import {
   Cocktail,
   CocktailFieldErrors,
   CocktailInput,
+  CocktailSort,
   CocktailSummary,
   IngredientRowFieldErrors,
   Ingredient,
@@ -154,18 +155,26 @@ function RecipeList({
   const [error, setError] = useState("");
   const [starError, setStarError] = useState("");
   const [pendingStarIds, setPendingStarIds] = useState<Set<number>>(new Set());
+  const [search, setSearch] = useState("");
+  const [baseSpirit, setBaseSpirit] = useState("all");
+  const [sort, setSort] = useState<CocktailSort>("newest");
+  const [reloadKey, setReloadKey] = useState(0);
 
-  async function load() {
+  useEffect(() => {
+    let active = true;
     setError("");
     setRecipes(null);
-    try {
-      setRecipes(await getCocktails(starredOnly));
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Your recipes could not be loaded.");
-    }
-  }
-
-  useEffect(() => { void load(); }, [starredOnly]);
+    getCocktails({ starredOnly, search, baseSpirit, sort })
+      .then((items) => { if (active) setRecipes(items); })
+      .catch((caught: unknown) => {
+        if (active) {
+          setError(caught instanceof Error
+            ? caught.message
+            : starredOnly ? "Your starred recipes could not be loaded." : "Your recipes could not be loaded.");
+        }
+      });
+    return () => { active = false; };
+  }, [starredOnly, search, baseSpirit, sort, reloadKey]);
 
   async function toggleStar(recipe: CocktailSummary) {
     const isStarred = !recipe.isStarred;
@@ -188,6 +197,8 @@ function RecipeList({
       });
     }
   }
+
+  const hasActiveFilters = Boolean(search.trim()) || baseSpirit !== "all";
 
   return (
     <section className="recipe-list-page" aria-labelledby="list-heading">
@@ -224,55 +235,96 @@ function RecipeList({
             Add recipe <span aria-hidden="true">+</span>
         </a>
       </div>
+      <div className="recipe-filters">
+        <label className="recipe-search-control">
+          <span className="sr-only">Search by recipe or ingredient</span>
+          <input
+            type="search"
+            placeholder="Search recipes or ingredients"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </label>
+        <label className="recipe-filter-control">
+          <span className="sr-only">Filter by base spirit</span>
+          <select value={baseSpirit} onChange={(event) => setBaseSpirit(event.target.value)}>
+            <option value="all">All</option>
+            {baseSpirits.map((spirit) => <option key={spirit} value={spirit}>{spirit}</option>)}
+          </select>
+        </label>
+        <label className="recipe-filter-control">
+          <span className="sr-only">Sort recipes</span>
+          <select value={sort} onChange={(event) => setSort(event.target.value as CocktailSort)}>
+            <option value="newest">Newest first</option>
+            <option value="rating">Highest rated</option>
+            <option value="name">A–Z</option>
+          </select>
+        </label>
+      </div>
       {error ? (
         <div className="recipe-message recipe-error" role="alert">
           <p>{error}</p>
-          <button type="button" className="recipe-text-action" onClick={() => void load()}>Try again</button>
+          <button type="button" className="recipe-text-action" onClick={() => setReloadKey((current) => current + 1)}>Try again</button>
         </div>
       ) : recipes === null ? (
         <div className="recipe-skeleton" aria-label="Loading recipes" aria-live="polite">
           <span /><span /><span />
         </div>
-      ) : recipes.length === 0 ? (
-        <div className="recipe-empty">
-          <span className="recipe-empty-mark" aria-hidden="true">{starredOnly ? "☆" : "+"}</span>
-          <h2>{starredOnly ? "Nothing starred yet." : "A good place to start."}</h2>
-          <p>{starredOnly ? "Star a recipe to keep it here." : "Save a drink you’ve enjoyed, and keep the recipe close for next time."}</p>
-          {!starredOnly && (
-            <button className="recipe-primary-button" type="button" onClick={() => navigate({ page: "new" })}>
-              Add recipe
-            </button>
-          )}
-        </div>
       ) : (
-        <div className="recipe-table" role="list" aria-label="Your cocktail recipes">
-          {recipes.map((recipe) => (
-            <div className="recipe-row" key={recipe.id} role="listitem">
-              <a
-                className="recipe-row-link"
-                href={`/cocktails/${recipe.id}`}
-                onClick={(event) => handleLink(event, { page: "detail", id: recipe.id })}
-              >
-                <span className="recipe-row-main">
-                  <span className="recipe-row-name">{recipe.name}</span>
-                  <span className="recipe-row-subtitle">{recipe.baseSpirit || "—"}</span>
-                </span>
-                <span className="recipe-row-rating">{recipe.rating} / 5</span>
-                <span className="recipe-row-ingredients">
-                  {recipe.ingredients.map((item) => item.name).join(", ") || "No ingredients yet"}
-                </span>
-                <span className="recipe-row-arrow" aria-hidden="true">↗</span>
-              </a>
-              <StarToggleButton
-                className="recipe-row-star"
-                disabled={pendingStarIds.has(recipe.id)}
-                isStarred={recipe.isStarred}
-                name={recipe.name}
-                onToggle={() => void toggleStar(recipe)}
-              />
+        <>
+          <p className="recipe-result-count" aria-live="polite">
+            {recipes.length} {recipes.length === 1 ? "recipe" : "recipes"}
+          </p>
+          {recipes.length === 0 ? (
+            hasActiveFilters ? (
+              <p className="recipe-no-results" role="status">No recipes match. Try a different search.</p>
+            ) : starredOnly ? (
+              <div className="recipe-empty">
+                <span className="recipe-empty-mark" aria-hidden="true">☆</span>
+                <h2>Nothing starred yet.</h2>
+                <p>Star a recipe to keep it here.</p>
+              </div>
+            ) : (
+              <div className="recipe-empty">
+                <span className="recipe-empty-mark" aria-hidden="true">+</span>
+                <h2>A good place to start.</h2>
+                <p>Save a drink you’ve enjoyed, and keep the recipe close for next time.</p>
+                <button className="recipe-primary-button" type="button" onClick={() => navigate({ page: "new" })}>
+                  Add recipe
+                </button>
+              </div>
+            )
+          ) : (
+            <div className="recipe-table" role="list" aria-label={starredOnly ? "Your starred recipes" : "Your cocktail recipes"}>
+              {recipes.map((recipe) => (
+                <div className="recipe-row" key={recipe.id} role="listitem">
+                  <a
+                    className="recipe-row-link"
+                    href={`/cocktails/${recipe.id}`}
+                    onClick={(event) => handleLink(event, { page: "detail", id: recipe.id })}
+                  >
+                    <span className="recipe-row-main">
+                      <span className="recipe-row-name">{recipe.name}</span>
+                      <span className="recipe-row-subtitle">{recipe.baseSpirit || "—"}</span>
+                    </span>
+                    <span className="recipe-row-rating">{recipe.rating} / 5</span>
+                    <span className="recipe-row-ingredients">
+                      {recipe.ingredients.map((item) => item.name).join(", ") || "No ingredients yet"}
+                    </span>
+                    <span className="recipe-row-arrow" aria-hidden="true">↗</span>
+                  </a>
+                  <StarToggleButton
+                    className="recipe-row-star"
+                    disabled={pendingStarIds.has(recipe.id)}
+                    isStarred={recipe.isStarred}
+                    name={recipe.name}
+                    onToggle={() => void toggleStar(recipe)}
+                  />
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          )}
+        </>
       )}
       {starError && <p className="recipe-inline-error" role="alert">{starError}</p>}
     </section>

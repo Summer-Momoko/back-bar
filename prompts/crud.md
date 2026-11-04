@@ -13,3 +13,7 @@ Requirements:
 Also create prompts/crud.md containing this exact prompt under "## Prompt 1".
 
 When done, explain in 3 sentences how ingredients are saved and how ownership is enforced.
+
+## Prompt 2 (bug fix)
+
+Bug: on the recipe detail page, the "Delete" button is cut off at the right edge (only "Dele" is visible) on a normal desktop window. Fix the header layout so the title, "Edit recipe", and "Delete" buttons all fit within the page padding at any width, and wrap below the title on narrow screens. Only change layout; don't touch other features.

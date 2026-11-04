@@ -2,12 +2,12 @@ import bcrypt from "bcryptjs";
 import connectPgSimple from "connect-pg-simple";
 import express, { type NextFunction, type Request, type Response } from "express";
 import session from "express-session";
-import { eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { createServer as createHttpServer } from "node:http";
 import { join, resolve } from "node:path";
 import { createServer as createViteServer } from "vite";
 import { db, pool } from "../db/index.js";
-import { users } from "../db/schema.js";
+import { cocktailIngredients, cocktails, ingredients, users } from "../db/schema.js";
 
 const app = express();
 const port = Number(process.env.PORT ?? 5000);
@@ -51,6 +51,73 @@ function normalizedUsername(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const username = value.trim().toLowerCase();
   return username.length >= 3 && username.length <= 64 ? username : null;
+}
+
+const BASE_SPIRITS = new Set(["gin", "whiskey", "rum", "tequila", "vodka", "brandy", "other"]);
+
+type CocktailInput = {
+  name: string;
+  baseSpirit: string;
+  glass: string;
+  method: string;
+  rating: number;
+  notes: string;
+  ingredients: Array<{ ingredientId: number; amount: string }>;
+};
+
+function parseCocktailInput(body: unknown): CocktailInput | null {
+  if (!body || typeof body !== "object") return null;
+  const input = body as Record<string, unknown>;
+  const name = typeof input.name === "string" ? input.name.trim() : "";
+  const baseSpirit = typeof input.baseSpirit === "string" ? input.baseSpirit : "";
+  const glass = typeof input.glass === "string" ? input.glass.trim() : "";
+  const method = typeof input.method === "string" ? input.method.trim() : "";
+  const notes = typeof input.notes === "string" ? input.notes.trim() : "";
+  const rating = Number(input.rating);
+  if (
+    !name ||
+    name.length > 160 ||
+    !BASE_SPIRITS.has(baseSpirit) ||
+    !glass ||
+    glass.length > 100 ||
+    !method ||
+    !Number.isInteger(rating) ||
+    rating < 1 ||
+    rating > 5 ||
+    notes.length > 5000 ||
+    !Array.isArray(input.ingredients) ||
+    input.ingredients.length < 1 ||
+    input.ingredients.length > 50
+  ) {
+    return null;
+  }
+
+  const rows: Array<{ ingredientId: number; amount: string }> = [];
+  for (const row of input.ingredients) {
+    if (!row || typeof row !== "object") return null;
+    const ingredient = row as Record<string, unknown>;
+    const ingredientId = Number(ingredient.ingredientId);
+    const amount = typeof ingredient.amount === "string" ? ingredient.amount.trim() : "";
+    if (!Number.isInteger(ingredientId) || ingredientId < 1 || !amount || amount.length > 100) {
+      return null;
+    }
+    rows.push({ ingredientId, amount });
+  }
+  if (new Set(rows.map((row) => row.ingredientId)).size !== rows.length) return null;
+
+  return { name, baseSpirit, glass, method, rating, notes, ingredients: rows };
+}
+
+function parseCocktailId(value: string | string[] | undefined): number | null {
+  if (typeof value !== "string") return null;
+  const id = Number(value);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+async function ingredientsExist(rows: CocktailInput["ingredients"]): Promise<boolean> {
+  const ids = rows.map((row) => row.ingredientId);
+  const found = await db.select({ id: ingredients.id }).from(ingredients).where(inArray(ingredients.id, ids));
+  return found.length === ids.length;
 }
 
 app.post("/api/auth/signup", async (req, res, next) => {
@@ -160,6 +227,227 @@ app.post("/api/auth/logout", requireUser, (req, res, next) => {
     });
     res.status(204).end();
   });
+});
+
+app.get("/api/ingredients", requireUser, async (_req, res, next) => {
+  try {
+    const rows = await db
+      .select({ id: ingredients.id, name: ingredients.name, category: ingredients.category })
+      .from(ingredients)
+      .orderBy(asc(ingredients.name));
+    res.json({ ingredients: rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/cocktails", requireUser, async (req, res, next) => {
+  try {
+    const rows = await db
+      .select({
+        id: cocktails.id,
+        name: cocktails.name,
+        baseSpirit: cocktails.baseSpirit,
+        rating: cocktails.rating,
+        ingredientId: cocktailIngredients.ingredientId,
+        ingredientName: ingredients.name,
+      })
+      .from(cocktails)
+      .leftJoin(cocktailIngredients, eq(cocktailIngredients.cocktailId, cocktails.id))
+      .leftJoin(ingredients, eq(ingredients.id, cocktailIngredients.ingredientId))
+      .where(eq(cocktails.userId, req.session.userId!))
+      .orderBy(desc(cocktails.createdAt), asc(cocktails.id));
+
+    const summaries = new Map<
+      number,
+      {
+        id: number;
+        name: string;
+        baseSpirit: string;
+        rating: number;
+        ingredients: Array<{ ingredientId: number; name: string }>;
+      }
+    >();
+    for (const row of rows) {
+      let summary = summaries.get(row.id);
+      if (!summary) {
+        summary = {
+          id: row.id,
+          name: row.name,
+          baseSpirit: row.baseSpirit,
+          rating: row.rating,
+          ingredients: [],
+        };
+        summaries.set(row.id, summary);
+      }
+      if (row.ingredientId !== null && row.ingredientName !== null) {
+        summary.ingredients.push({ ingredientId: row.ingredientId, name: row.ingredientName });
+      }
+    }
+    res.json({ cocktails: [...summaries.values()] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/cocktails/:id", requireUser, async (req, res, next) => {
+  const id = parseCocktailId(req.params.id);
+  if (id === null) {
+    res.status(404).json({ error: "Recipe not found." });
+    return;
+  }
+  try {
+    const [cocktail] = await db
+      .select({
+        id: cocktails.id,
+        name: cocktails.name,
+        baseSpirit: cocktails.baseSpirit,
+        glass: cocktails.glass,
+        method: cocktails.method,
+        rating: cocktails.rating,
+        notes: cocktails.notes,
+        createdAt: cocktails.createdAt,
+      })
+      .from(cocktails)
+      .where(and(eq(cocktails.id, id), eq(cocktails.userId, req.session.userId!)))
+      .limit(1);
+    if (!cocktail) {
+      res.status(404).json({ error: "Recipe not found." });
+      return;
+    }
+
+    const rows = await db
+      .select({
+        ingredientId: cocktailIngredients.ingredientId,
+        name: ingredients.name,
+        amount: cocktailIngredients.amount,
+      })
+      .from(cocktailIngredients)
+      .innerJoin(ingredients, eq(ingredients.id, cocktailIngredients.ingredientId))
+      .where(eq(cocktailIngredients.cocktailId, id))
+      .orderBy(asc(cocktailIngredients.id));
+    res.json({ cocktail: { ...cocktail, ingredients: rows } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/cocktails", requireUser, async (req, res, next) => {
+  const input = parseCocktailInput(req.body);
+  if (!input || !(await ingredientsExist(input.ingredients))) {
+    res.status(400).json({ error: "Invalid recipe." });
+    return;
+  }
+  try {
+    const id = await db.transaction(async (tx) => {
+      const [cocktail] = await tx
+        .insert(cocktails)
+        .values({
+          userId: req.session.userId!,
+          name: input.name,
+          baseSpirit: input.baseSpirit,
+          glass: input.glass,
+          method: input.method,
+          rating: input.rating,
+          notes: input.notes,
+        })
+        .returning({ id: cocktails.id });
+      await tx.insert(cocktailIngredients).values(
+        input.ingredients.map((row) => ({
+          cocktailId: cocktail.id,
+          ingredientId: row.ingredientId,
+          amount: row.amount,
+        })),
+      );
+      return cocktail.id;
+    });
+    res.status(201).json({ cocktail: { id } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/cocktails/:id", requireUser, async (req, res, next) => {
+  const id = parseCocktailId(req.params.id);
+  if (id === null) {
+    res.status(404).json({ error: "Recipe not found." });
+    return;
+  }
+  try {
+    const [ownedCocktail] = await db
+      .select({ id: cocktails.id })
+      .from(cocktails)
+      .where(and(eq(cocktails.id, id), eq(cocktails.userId, req.session.userId!)))
+      .limit(1);
+    if (!ownedCocktail) {
+      res.status(404).json({ error: "Recipe not found." });
+      return;
+    }
+  } catch (error) {
+    next(error);
+    return;
+  }
+
+  const input = parseCocktailInput(req.body);
+  if (!input || !(await ingredientsExist(input.ingredients))) {
+    res.status(400).json({ error: "Invalid recipe." });
+    return;
+  }
+  try {
+    const updated = await db.transaction(async (tx) => {
+      const [cocktail] = await tx
+        .update(cocktails)
+        .set({
+          name: input.name,
+          baseSpirit: input.baseSpirit,
+          glass: input.glass,
+          method: input.method,
+          rating: input.rating,
+          notes: input.notes,
+        })
+        .where(and(eq(cocktails.id, id), eq(cocktails.userId, req.session.userId!)))
+        .returning({ id: cocktails.id });
+      if (!cocktail) return false;
+
+      await tx.delete(cocktailIngredients).where(eq(cocktailIngredients.cocktailId, id));
+      await tx.insert(cocktailIngredients).values(
+        input.ingredients.map((row) => ({
+          cocktailId: id,
+          ingredientId: row.ingredientId,
+          amount: row.amount,
+        })),
+      );
+      return true;
+    });
+    if (!updated) {
+      res.status(404).json({ error: "Recipe not found." });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/cocktails/:id", requireUser, async (req, res, next) => {
+  const id = parseCocktailId(req.params.id);
+  if (id === null) {
+    res.status(404).json({ error: "Recipe not found." });
+    return;
+  }
+  try {
+    const [deleted] = await db
+      .delete(cocktails)
+      .where(and(eq(cocktails.id, id), eq(cocktails.userId, req.session.userId!)))
+      .returning({ id: cocktails.id });
+    if (!deleted) {
+      res.status(404).json({ error: "Recipe not found." });
+      return;
+    }
+    res.status(204).end();
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.use("/api", requireUser, (_req, res) => {

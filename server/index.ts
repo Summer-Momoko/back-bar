@@ -65,47 +65,83 @@ type CocktailInput = {
   ingredients: Array<{ ingredientId: number; amount: string }>;
 };
 
-function parseCocktailInput(body: unknown): CocktailInput | null {
-  if (!body || typeof body !== "object") return null;
-  const input = body as Record<string, unknown>;
+type CocktailFieldErrors = {
+  name?: string;
+  baseSpirit?: string;
+  glass?: string;
+  method?: string;
+  rating?: string;
+  notes?: string;
+  ingredients?: string;
+  ingredientRows?: Array<{ ingredientId?: string; amount?: string }>;
+};
+
+function parseCocktailInput(body: unknown): { input: CocktailInput | null; fieldErrors: CocktailFieldErrors } {
+  const fieldErrors: CocktailFieldErrors = {};
+  const input = body && typeof body === "object" ? body as Record<string, unknown> : {};
   const name = typeof input.name === "string" ? input.name.trim() : "";
   const baseSpirit = typeof input.baseSpirit === "string" ? input.baseSpirit : "";
   const glass = typeof input.glass === "string" ? input.glass.trim() : "";
   const method = typeof input.method === "string" ? input.method.trim() : "";
   const notes = typeof input.notes === "string" ? input.notes.trim() : "";
   const rating = Number(input.rating);
-  if (
-    !name ||
-    name.length > 160 ||
-    !BASE_SPIRITS.has(baseSpirit) ||
-    !glass ||
-    glass.length > 100 ||
-    !method ||
-    !Number.isInteger(rating) ||
-    rating < 1 ||
-    rating > 5 ||
-    notes.length > 5000 ||
-    !Array.isArray(input.ingredients) ||
-    input.ingredients.length < 1 ||
-    input.ingredients.length > 50
-  ) {
-    return null;
+  if (!name) fieldErrors.name = "Give your drink a name";
+  else if (name.length > 160) fieldErrors.name = "Use 160 characters or fewer";
+  if (!BASE_SPIRITS.has(baseSpirit)) fieldErrors.baseSpirit = "Pick a base spirit";
+  if (!glass) fieldErrors.glass = "Choose a glass";
+  else if (glass.length > 100) fieldErrors.glass = "Use 100 characters or fewer";
+  if (!method) fieldErrors.method = "Add a method";
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+    fieldErrors.rating = "Choose a rating from 1 to 5";
   }
+  if (notes.length > 5000) fieldErrors.notes = "Use 5,000 characters or fewer";
 
   const rows: Array<{ ingredientId: number; amount: string }> = [];
-  for (const row of input.ingredients) {
-    if (!row || typeof row !== "object") return null;
-    const ingredient = row as Record<string, unknown>;
+  const rawRows = Array.isArray(input.ingredients) ? input.ingredients : [];
+  const rowErrors: Array<{ ingredientId?: string; amount?: string }> =
+    Array.from({ length: Math.min(rawRows.length, 50) }, () => ({}));
+  const seenIngredientIds = new Set<number>();
+  let selectedCount = 0;
+  if (!Array.isArray(input.ingredients)) fieldErrors.ingredients = "Add at least one ingredient";
+  if (rawRows.length > 50) fieldErrors.ingredients = "Add no more than 50 ingredients";
+
+  for (const [index, row] of rawRows.slice(0, 50).entries()) {
+    const ingredient = row && typeof row === "object" ? row as Record<string, unknown> : {};
     const ingredientId = Number(ingredient.ingredientId);
     const amount = typeof ingredient.amount === "string" ? ingredient.amount.trim() : "";
-    if (!Number.isInteger(ingredientId) || ingredientId < 1 || !amount || amount.length > 100) {
-      return null;
-    }
-    rows.push({ ingredientId, amount });
-  }
-  if (new Set(rows.map((row) => row.ingredientId)).size !== rows.length) return null;
+    const hasIngredient = Number.isInteger(ingredientId) && ingredientId > 0;
+    const hasAmount = amount.length > 0;
+    const rowError: { ingredientId?: string; amount?: string } = {};
 
-  return { name, baseSpirit, glass, method, rating, notes, ingredients: rows };
+    if (!hasIngredient && !hasAmount) continue;
+    if (!hasIngredient) {
+      rowError.ingredientId = "Choose an ingredient";
+    } else {
+      selectedCount += 1;
+      if (seenIngredientIds.has(ingredientId)) {
+        rowError.ingredientId = "This ingredient is already listed";
+      }
+      seenIngredientIds.add(ingredientId);
+      if (!hasAmount) rowError.amount = "Enter an amount";
+      else if (amount.length > 100) rowError.amount = "Use 100 characters or fewer";
+      if (hasAmount && amount.length <= 100 && !rowError.ingredientId) {
+        rows.push({ ingredientId, amount });
+      }
+    }
+    rowErrors[index] = rowError;
+  }
+
+  if (selectedCount === 0) fieldErrors.ingredients ??= "Add at least one ingredient";
+  if (rowErrors.some((rowError) => rowError && (rowError.ingredientId || rowError.amount))) {
+    fieldErrors.ingredientRows = rowErrors;
+  }
+
+  const hasErrors = Object.values(fieldErrors).some((error) => error !== undefined);
+  if (hasErrors) return { input: null, fieldErrors };
+  return {
+    input: { name, baseSpirit, glass, method, rating, notes, ingredients: rows },
+    fieldErrors,
+  };
 }
 
 function parseCocktailId(value: string | string[] | undefined): number | null {
@@ -114,10 +150,11 @@ function parseCocktailId(value: string | string[] | undefined): number | null {
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
-async function ingredientsExist(rows: CocktailInput["ingredients"]): Promise<boolean> {
+async function missingIngredientIds(rows: CocktailInput["ingredients"]): Promise<Set<number>> {
   const ids = rows.map((row) => row.ingredientId);
   const found = await db.select({ id: ingredients.id }).from(ingredients).where(inArray(ingredients.id, ids));
-  return found.length === ids.length;
+  const available = new Set(found.map((row) => row.id));
+  return new Set(ids.filter((id) => !available.has(id)));
 }
 
 app.post("/api/auth/signup", async (req, res, next) => {
@@ -333,11 +370,23 @@ app.get("/api/cocktails/:id", requireUser, async (req, res, next) => {
 });
 
 app.post("/api/cocktails", requireUser, async (req, res, next) => {
-  const input = parseCocktailInput(req.body);
-  if (!input || !(await ingredientsExist(input.ingredients))) {
-    res.status(400).json({ error: "Invalid recipe." });
+  const validation = parseCocktailInput(req.body);
+  if (!validation.input) {
+    res.status(400).json({
+      error: "Please correct the highlighted fields.",
+      fieldErrors: validation.fieldErrors,
+    });
     return;
   }
+  const missingIds = await missingIngredientIds(validation.input.ingredients);
+  if (missingIds.size) {
+    res.status(400).json({
+      error: "Please correct the highlighted fields.",
+      fieldErrors: { ingredients: "Choose ingredients from the list" },
+    });
+    return;
+  }
+  const input = validation.input;
   try {
     const id = await db.transaction(async (tx) => {
       const [cocktail] = await tx
@@ -388,11 +437,23 @@ app.put("/api/cocktails/:id", requireUser, async (req, res, next) => {
     return;
   }
 
-  const input = parseCocktailInput(req.body);
-  if (!input || !(await ingredientsExist(input.ingredients))) {
-    res.status(400).json({ error: "Invalid recipe." });
+  const validation = parseCocktailInput(req.body);
+  if (!validation.input) {
+    res.status(400).json({
+      error: "Please correct the highlighted fields.",
+      fieldErrors: validation.fieldErrors,
+    });
     return;
   }
+  const missingIds = await missingIngredientIds(validation.input.ingredients);
+  if (missingIds.size) {
+    res.status(400).json({
+      error: "Please correct the highlighted fields.",
+      fieldErrors: { ingredients: "Choose ingredients from the list" },
+    });
+    return;
+  }
+  const input = validation.input;
   try {
     const updated = await db.transaction(async (tx) => {
       const [cocktail] = await tx

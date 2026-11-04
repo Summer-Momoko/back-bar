@@ -158,6 +158,9 @@
 .recipe-field textarea { min-height: 104px; padding: 12px; resize: vertical; line-height: 1.6; }
 .recipe-field input::placeholder, .recipe-field textarea::placeholder { color: #a5a59f; }
 .recipe-field input:focus, .recipe-field select:focus, .recipe-field textarea:focus { border-color: var(--recipe-sage); box-shadow: 0 0 0 3px var(--recipe-sage-wash); }
+.recipe-field input[aria-invalid="true"], .recipe-field select[aria-invalid="true"], .recipe-field textarea[aria-invalid="true"] { border-color: #c68d87; }
+.recipe-validation-message { margin: 0; color: #9c4840; font-size: 11px; font-weight: 400; line-height: 1.45; }
+.recipe-field small.recipe-validation-message { color: #9c4840; }
 .recipe-field-wide { grid-column: 1 / -1; }
 .recipe-form-section { border-top: 1px solid var(--recipe-line); padding-top: 25px; }
 .recipe-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 15px; margin-bottom: 19px; }

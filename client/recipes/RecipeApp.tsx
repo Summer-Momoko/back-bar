@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -33,6 +33,7 @@ import {
   setBarItem,
   updateCocktail,
 } from "../recipeApi.js";
+import { pickRandomMakeable } from "./randomPick.js";
 import "./recipes.css";
 
 type RecipeRoute =
@@ -72,6 +73,10 @@ function recipePath(route: RecipeRoute): string {
 export function RecipeApp({ displayName, onLogout }: RecipeAppProps) {
   const [route, setRoute] = useState<RecipeRoute>(() => routeFromPath(window.location.pathname));
   const [logoutError, setLogoutError] = useState("");
+  const previousSurpriseId = useRef<number | null>(null);
+  const [surpriseLoading, setSurpriseLoading] = useState(false);
+  const [surpriseEmpty, setSurpriseEmpty] = useState(false);
+  const [surpriseError, setSurpriseError] = useState("");
 
   useEffect(() => {
     const onPopState = () => setRoute(routeFromPath(window.location.pathname));
@@ -83,6 +88,8 @@ export function RecipeApp({ displayName, onLogout }: RecipeAppProps) {
     const path = recipePath(nextRoute);
     if (window.location.pathname !== path) window.history.pushState({}, "", path);
     setRoute(nextRoute);
+    setSurpriseEmpty(false);
+    setSurpriseError("");
     window.scrollTo({ top: 0, behavior: "instant" });
   }
 
@@ -90,6 +97,27 @@ export function RecipeApp({ displayName, onLogout }: RecipeAppProps) {
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
     navigate(nextRoute);
+  }
+
+  async function surpriseMe() {
+    if (surpriseLoading) return;
+    setSurpriseLoading(true);
+    setSurpriseEmpty(false);
+    setSurpriseError("");
+    try {
+      const { makeableCocktails } = await getMyBar();
+      const selected = pickRandomMakeable(makeableCocktails, previousSurpriseId.current);
+      if (!selected) {
+        setSurpriseEmpty(true);
+        return;
+      }
+      previousSurpriseId.current = selected.id;
+      navigate({ page: "detail", id: selected.id });
+    } catch (caught) {
+      setSurpriseError(caught instanceof Error ? caught.message : "A surprise recipe could not be chosen.");
+    } finally {
+      setSurpriseLoading(false);
+    }
   }
 
   async function logout() {
@@ -142,6 +170,10 @@ export function RecipeApp({ displayName, onLogout }: RecipeAppProps) {
             starredOnly={Boolean(route.starred)}
             navigate={navigate}
             handleLink={handleLink}
+            onSurpriseMe={surpriseMe}
+            surpriseLoading={surpriseLoading}
+            surpriseEmpty={surpriseEmpty}
+            surpriseError={surpriseError}
           />
         )}
         {route.page === "dashboard" && <DashboardPage />}
@@ -514,10 +546,18 @@ function RecipeList({
   navigate,
   handleLink,
   starredOnly,
+  onSurpriseMe,
+  surpriseLoading,
+  surpriseEmpty,
+  surpriseError,
 }: {
   navigate: (route: RecipeRoute) => void;
   handleLink: (event: React.MouseEvent<HTMLAnchorElement>, route: RecipeRoute) => void;
   starredOnly: boolean;
+  onSurpriseMe: () => Promise<void>;
+  surpriseLoading: boolean;
+  surpriseEmpty: boolean;
+  surpriseError: string;
 }) {
   const [recipes, setRecipes] = useState<CocktailSummary[] | null>(null);
   const [error, setError] = useState("");
@@ -595,13 +635,25 @@ function RecipeList({
             </nav>
           </div>
         </div>
-        <a
-          className="recipe-primary-link"
-          href="/cocktails/new"
-          onClick={(event) => handleLink(event, { page: "new" })}
-        >
+        <div className="recipe-list-actions">
+          {!starredOnly && (
+            <button
+              className="recipe-surprise-button"
+              disabled={surpriseLoading}
+              type="button"
+              onClick={() => void onSurpriseMe()}
+            >
+              {surpriseLoading ? "Picking…" : "Surprise me"}
+            </button>
+          )}
+          <a
+            className="recipe-primary-link"
+            href="/cocktails/new"
+            onClick={(event) => handleLink(event, { page: "new" })}
+          >
             Add recipe <span aria-hidden="true">+</span>
-        </a>
+          </a>
+        </div>
       </div>
       <div className="recipe-filters">
         <label className="recipe-search-control">
@@ -629,6 +681,13 @@ function RecipeList({
           </select>
         </label>
       </div>
+      {!starredOnly && surpriseEmpty && (
+        <p className="recipe-surprise-message" role="status">
+          <span>Stock your bar first — nothing is makeable yet.</span>
+          <a href="/my-bar" onClick={(event) => handleLink(event, { page: "myBar" })}>Go to My Bar</a>
+        </p>
+      )}
+      {!starredOnly && surpriseError && <p className="recipe-inline-error" role="alert">{surpriseError}</p>}
       {error ? (
         <div className="recipe-message recipe-error" role="alert">
           <p>{error}</p>

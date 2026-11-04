@@ -52,6 +52,12 @@
 .recipe-main { width: min(100% - 48px, 880px); margin: 0 auto; }
 .recipe-list-page { padding: clamp(56px, 9vw, 108px) 0 100px; }
 .recipe-page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 43px; }
+.recipe-list-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.recipe-surprise-button { min-height: 42px; border: 1px solid #d9dfd8; border-radius: 4px; padding: 0 14px; color: var(--recipe-sage); background: #fff; font-size: 13px; font-weight: 500; }
+.recipe-surprise-button:hover:not(:disabled) { border-color: var(--recipe-sage); background: #f5f7f4; }
+.recipe-surprise-message { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; margin: -12px 0 20px; border: 1px solid var(--recipe-line); padding: 13px 15px; color: var(--recipe-muted); font-size: 13px; }
+.recipe-surprise-message a { color: var(--recipe-sage); font-weight: 500; text-decoration: none; }
+.recipe-surprise-message a:hover { text-decoration: underline; }
 .recipe-title-tabs { display: flex; align-items: baseline; flex-wrap: wrap; gap: 22px; }
 .recipe-view-tabs { display: flex; align-items: center; gap: 17px; margin-bottom: 5px; }
 .recipe-view-tab { border-bottom: 1px solid transparent; padding-bottom: 4px; color: var(--recipe-muted); font-size: 12px; text-decoration: none; }

@@ -84,3 +84,23 @@ erDiagram
 - **Process risk:** Replit Agent auto-commits checkpoints to whatever branch is checked out. I'll always switch to the feature branch *before* prompting, so nothing lands on main directly.
 - **Cut first:** "One bottle away" (feature 9). If time runs out, I'll replace it with a dark mode toggle, which is smaller.
 - **Simplify if needed:** amounts stay free text ("1 oz", "2 dashes") rather than number + unit.
+
+---
+
+## Plan vs. Reality
+
+| Planned feature | Shipped / Changed / Cut | Status | Learning | What changed and why (one line) |
+|---|---|---|---|---|
+| 1. Sign up and login | Shipped | Done | The Replit preview pane couldn't keep a login session, so the agent never saw any signed-in page — I had to be the one who looked. | Worked as planned; deployment config needed its own unplanned PR before the app could go live. |
+| 2. Data model | Changed | Done | A shared ingredient list needs a hierarchy: "Gin" and "London dry gin" are separate rows, so a substitute counts as missing. | Built as designed, but my plan's "any user can add a new ingredient" line was silently dropped until the stranger test exposed it. |
+| 3. Create / read / update / delete | Shipped | Done | "It builds" is not "it works" — I caught the Delete button cut off at the page edge only by clicking through it myself. | Same PR included a layout-only bug fix prompt. |
+| 4. Validation | Shipped | Done | Validating on the server too means the API can't save a broken recipe even if the form is bypassed. | As planned. |
+| 5. Stars | Shipped | Done | One junction table (user_id, cocktail_id) for everyone is simpler than per-user lists. | As planned. |
+| 6. Search, filter, sort | Shipped | Done | Searching by ingredient ("campari" → Negroni) turned out to be the most useful part. | As planned. |
+| 7. Dashboard | Shipped | Done | Putting the stats in their own function made them testable. | Added a "starred recipes" stat that wasn't in the plan. |
+| 8. My Bar + What can I make | Shipped | Done | The matching is only as good as the ingredient data behind it. | As planned. |
+| 9. One bottle away | Shipped | Done | It was the first thing I planned to cut, but it was quick because it reused the My Bar matching logic. | Not cut. |
+| 10. Random pick | Shipped | Done | Small features with a clear rule are cheap to build and test. | As planned. |
+| Tests (data isolation, dashboard average) | Shipped | Done | The agent broke, ran, and restored the code on its own, so I had no failing screenshot; I re-prompted it to stop after the break. | Red/green done by hand on the second try. |
+| Add a missing ingredient (PLAN.md §3, not a numbered feature) | Missed, then shipped | Done | Requirements buried in the schema section, not in the numbered feature list, got skipped. | Built after the stranger test showed "What can I make?" gave wrong answers without it. |
+| Dark mode (backup cut option) | Cut | Backlogged | — | Not needed, since feature 9 wasn't cut. |

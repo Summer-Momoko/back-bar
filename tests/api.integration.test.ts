@@ -21,6 +21,7 @@ type TestUser = {
 };
 
 const testUsers: Array<Omit<TestUser, "agent">> = [];
+const testIngredientIds: number[] = [];
 let ginIngredientId: number;
 
 async function createUser(label: string): Promise<TestUser> {
@@ -54,6 +55,10 @@ async function createRecipe(user: TestUser, name: string, rating: number): Promi
 
 afterEach(async () => {
   try {
+    if (testIngredientIds.length > 0) {
+      await pool.query("delete from ingredients where id = any($1::int[])", [testIngredientIds]);
+      testIngredientIds.length = 0;
+    }
     if (testUsers.length === 0) return;
 
     const usernames = testUsers.map(({ username }) => username);
@@ -124,5 +129,33 @@ describe("authenticated API data isolation", () => {
     const response = await userA.agent.get("/api/dashboard").expect(200);
     expect(response.body.stats.averageRating).toBe(4);
     expect(response.body.stats.totalRecipes).toBe(3);
+  });
+});
+
+describe("shared ingredient catalog", () => {
+  it("trims ingredient names and reuses an existing name regardless of case", async () => {
+    const userA = await createUser("ingredient_a");
+    const userB = await createUser("ingredient_b");
+    const name = `Back Bar Test ${randomUUID()}`;
+
+    const created = await userA.agent
+      .post("/api/ingredients")
+      .send({ name: `  ${name}  `, category: "garnish" })
+      .expect(201);
+    testIngredientIds.push(created.body.ingredient.id as number);
+    expect(created.body.ingredient.name).toBe(name);
+    expect(created.body.ingredient.category).toBe("garnish");
+
+    const reused = await userB.agent
+      .post("/api/ingredients")
+      .send({ name: name.toUpperCase(), category: "spirit" })
+      .expect(200);
+    expect(reused.body.ingredient.id).toBe(created.body.ingredient.id);
+    expect(reused.body.ingredient.name).toBe(name);
+
+    await userA.agent
+      .post("/api/ingredients")
+      .send({ name: "   ", category: "garnish" })
+      .expect(400);
   });
 });

@@ -23,6 +23,7 @@ import {
   MyBarIngredient,
   OneAwayCocktailSummary,
   createCocktail,
+  createIngredient,
   deleteCocktail,
   getCocktail,
   getCocktails,
@@ -296,6 +297,7 @@ function DashboardPage() {
 }
 
 const barCategoryOrder = ["spirit", "liqueur", "juice", "syrup", "bitters", "garnish", "other"] as const;
+const ingredientCategoryOptions = ["spirit", "liqueur", "juice", "syrup", "bitters", "garnish", "other"] as const;
 
 const barCategoryLabels: Record<(typeof barCategoryOrder)[number], string> = {
   spirit: "Spirit",
@@ -318,6 +320,8 @@ function MyBarPage({
   const [search, setSearch] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [creatingIngredient, setCreatingIngredient] = useState(false);
+  const [ingredientCreateOpen, setIngredientCreateOpen] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
@@ -366,6 +370,28 @@ function MyBarPage({
     void saveIngredient(ingredient, !ingredient.inBar);
   }
 
+  async function createAndAddIngredient(name: string, category: string) {
+    if (creatingIngredient || !barData) return;
+    setError("");
+    setCreatingIngredient(true);
+    try {
+      const created = await createIngredient(name, category);
+      const existing = barData.ingredients.find((item) => item.id === created.id);
+      const barIngredient: MyBarIngredient = existing ?? { ...created, inBar: false };
+      if (!existing) {
+        setBarData((current) => current && ({
+          ...current,
+          ingredients: [...current.ingredients, barIngredient].sort((a, b) => a.name.localeCompare(b.name)),
+        }));
+      }
+      if (!barIngredient.inBar) await saveIngredient(barIngredient, true);
+      setSearch("");
+      setIngredientCreateOpen(false);
+    } finally {
+      setCreatingIngredient(false);
+    }
+  }
+
   function addMissingIngredient(ingredientId: number) {
     const ingredient = barData?.ingredients.find((item) => item.id === ingredientId);
     if (ingredient && !ingredient.inBar) void saveIngredient(ingredient, true);
@@ -373,6 +399,10 @@ function MyBarPage({
 
   const filteredIngredients = (barData?.ingredients ?? []).filter((ingredient) =>
     ingredient.name.toLowerCase().includes(search.trim().toLowerCase()),
+  );
+  const canCreateIngredient = Boolean(
+    search.trim() &&
+    !barData?.ingredients.some((ingredient) => ingredient.name.toLowerCase() === search.trim().toLowerCase()),
   );
   const ingredientGroups = barCategoryOrder
     .map((category) => ({
@@ -398,6 +428,17 @@ function MyBarPage({
           onChange={(event) => setSearch(event.target.value)}
         />
       </label>
+      {canCreateIngredient && (
+        <div className="my-bar-create-ingredient">
+          <NewIngredientOption
+            name={search}
+            open={ingredientCreateOpen}
+            saving={creatingIngredient}
+            onOpenChange={setIngredientCreateOpen}
+            onCreate={createAndAddIngredient}
+          />
+        </div>
+      )}
       {error && (
         <div className="recipe-message recipe-error" role="alert">
           <p>{error}</p>
@@ -1055,6 +1096,14 @@ function RecipeEditor({
     if (hasSubmitted) setFieldErrors(validateRecipe(fields, nextRows, ingredients));
   }
 
+  async function addIngredientToCatalog(name: string, category: string) {
+    const ingredient = await createIngredient(name, category);
+    setIngredients((current) => current.some((item) => item.id === ingredient.id)
+      ? current
+      : [...current, ingredient].sort((a, b) => a.name.localeCompare(b.name)));
+    return ingredient;
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
@@ -1197,10 +1246,12 @@ function RecipeEditor({
               fieldErrors={fieldErrors.ingredientRows?.[index]}
               index={index}
               row={row}
+              allIngredients={ingredients}
               ingredients={ingredients.filter((item) =>
                 !rows.some((other, otherIndex) => otherIndex !== index && other.ingredientId === item.id),
               )}
               onChange={(patch) => updateRow(index, patch)}
+              onCreateIngredient={addIngredientToCatalog}
               onRemove={() => removeRow(index)}
               canRemove={rows.length > 1 || Boolean(row.ingredientId || row.amount || row.query)}
             />
@@ -1237,22 +1288,31 @@ function IngredientPicker({
   index,
   row,
   ingredients,
+  allIngredients,
   fieldErrors,
   onChange,
+  onCreateIngredient,
   onRemove,
   canRemove,
 }: {
   index: number;
   row: IngredientRow;
   ingredients: Ingredient[];
+  allIngredients: Ingredient[];
   fieldErrors?: IngredientRowFieldErrors;
   onChange: (patch: Partial<IngredientRow>) => void;
+  onCreateIngredient: (name: string, category: string) => Promise<Ingredient>;
   onRemove: () => void;
   canRemove: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
   const filtered = ingredients.filter((item) =>
     item.name.toLowerCase().includes(row.query.trim().toLowerCase()),
+  );
+  const canCreate = Boolean(
+    row.query.trim() &&
+    !allIngredients.some((item) => item.name.toLowerCase() === row.query.trim().toLowerCase()),
   );
   const listId = `ingredient-options-${index}`;
 
@@ -1268,7 +1328,12 @@ function IngredientPicker({
             aria-expanded={open}
             aria-invalid={Boolean(fieldErrors?.ingredientId)}
             autoComplete="off"
-            onBlur={() => window.setTimeout(() => setOpen(false), 120)}
+            onBlur={(event) => {
+              const picker = event.currentTarget.closest(".recipe-picker-wrap");
+              window.setTimeout(() => {
+                if (!picker?.contains(document.activeElement)) setOpen(false);
+              }, 120);
+            }}
             onChange={(event) => {
               onChange({ query: event.target.value, ingredientId: null });
               setOpen(true);
@@ -1293,7 +1358,7 @@ function IngredientPicker({
         </label>
         {open && (
           <ul className="recipe-ingredient-options" id={listId} role="listbox" aria-label="Ingredient options">
-            {filtered.length ? filtered.slice(0, 8).map((item) => (
+            {filtered.slice(0, 8).map((item) => (
               <li key={item.id}>
                 <button
                   type="button"
@@ -1308,7 +1373,24 @@ function IngredientPicker({
                   <span>{item.name}</span><small>{item.category}</small>
                 </button>
               </li>
-            )) : <li className="recipe-no-options">No matching ingredients</li>}
+            ))}
+            {canCreate && (
+              <li className="recipe-new-ingredient-option">
+                <NewIngredientOption
+                  name={row.query}
+                  open={createOpen}
+                  onOpenChange={setCreateOpen}
+                  onCreate={async (name, category) => {
+                    const ingredient = await onCreateIngredient(name, category);
+                    onChange({ ingredientId: ingredient.id, query: ingredient.name });
+                    setCreateOpen(false);
+                    setOpen(false);
+                    return ingredient;
+                  }}
+                />
+              </li>
+            )}
+            {!filtered.length && !canCreate && <li className="recipe-no-options">No matching ingredients</li>}
           </ul>
         )}
       </div>
@@ -1334,6 +1416,72 @@ function IngredientPicker({
         onClick={onRemove}
         type="button"
       >Remove</button>
+    </div>
+  );
+}
+
+function NewIngredientOption({
+  name,
+  open,
+  saving = false,
+  onOpenChange,
+  onCreate,
+}: {
+  name: string;
+  open: boolean;
+  saving?: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCreate: (name: string, category: string) => Promise<Ingredient | void>;
+}) {
+  const [category, setCategory] = useState("");
+  const [error, setError] = useState("");
+  const [creating, setCreating] = useState(false);
+  const trimmedName = name.trim();
+
+  async function submit() {
+    if (!category || creating || saving) return;
+    setError("");
+    setCreating(true);
+    try {
+      await onCreate(trimmedName, category);
+      setCategory("");
+      onOpenChange(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The ingredient could not be added.");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <button
+        className="recipe-add-ingredient-option"
+        type="button"
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={() => onOpenChange(true)}
+      >
+        + Add &quot;{trimmedName}&quot; as a new ingredient
+      </button>
+    );
+  }
+
+  return (
+    <div className="recipe-new-ingredient-form">
+      <label>
+        <span>Category for &quot;{trimmedName}&quot;</span>
+        <select value={category} onChange={(event) => setCategory(event.target.value)}>
+          <option value="">Choose a category</option>
+          {ingredientCategoryOptions.map((item) => <option key={item} value={item}>{item}</option>)}
+        </select>
+      </label>
+      <div>
+        <button type="button" disabled={!category || creating || saving} onMouseDown={(event) => event.preventDefault()} onClick={() => void submit()}>
+          {creating || saving ? "Adding…" : "Add ingredient"}
+        </button>
+        <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => onOpenChange(false)}>Cancel</button>
+      </div>
+      {error && <small className="recipe-inline-error" role="alert">{error}</small>}
     </div>
   );
 }

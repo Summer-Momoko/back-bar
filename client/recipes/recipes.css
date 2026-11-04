@@ -242,6 +242,16 @@
 .recipe-ingredient-options button { width: 100%; min-height: 39px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 0; border-radius: 3px; padding: 0 9px; color: var(--recipe-ink); background: transparent; text-align: left; font-size: 13px; }
 .recipe-ingredient-options button:hover, .recipe-ingredient-options button[aria-selected="true"] { background: #f3f5f1; }
 .recipe-ingredient-options small { color: var(--recipe-muted); font-size: 10px; text-transform: capitalize; }
+.recipe-add-ingredient-option { width: 100%; min-height: 39px; border: 0; border-radius: 3px; padding: 8px 9px; color: var(--recipe-sage); background: transparent; text-align: left; font-size: 13px; }
+.recipe-add-ingredient-option:hover { background: #f3f5f1; }
+.recipe-new-ingredient-form { display: grid; gap: 9px; padding: 10px; border-top: 1px solid var(--recipe-line); }
+.recipe-new-ingredient-form label { display: grid; gap: 6px; color: var(--recipe-muted); font-size: 11px; }
+.recipe-new-ingredient-form select { min-height: 36px; border: 1px solid #e4e4df; border-radius: 4px; padding: 0 8px; color: var(--recipe-ink); background: #fff; font-size: 12px; }
+.recipe-new-ingredient-form > div { display: flex; gap: 12px; }
+.recipe-new-ingredient-form > div button { border: 0; padding: 4px 0; color: var(--recipe-sage); background: transparent; font-size: 12px; }
+.recipe-new-ingredient-form > div button:disabled { cursor: not-allowed; opacity: .5; }
+.my-bar-create-ingredient { width: min(100%, 440px); margin: -22px 0 31px; border: 1px solid #e4e4df; border-radius: 4px; background: #fff; }
+.my-bar-create-ingredient .recipe-new-ingredient-form { border-top: 0; }
 .recipe-no-options { padding: 11px 9px; color: var(--recipe-muted); font-size: 12px; }
 .recipe-remove-row { min-height: 44px; border: 0; padding: 0; color: #8a8a85; background: transparent; font-size: 11px; }
 .recipe-remove-row:not(:disabled):hover { color: #9c4840; text-decoration: underline; }

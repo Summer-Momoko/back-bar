@@ -49,6 +49,21 @@ export type DashboardStats = {
   recipesByBaseSpirit: Array<{ baseSpirit: string; count: number }>;
 };
 
+export type MyBarIngredient = Ingredient & { inBar: boolean };
+
+export type MakeableCocktailSummary = {
+  id: number;
+  name: string;
+  baseSpirit: string;
+  rating: number;
+  ingredients: Array<{ ingredientId: number; name: string }>;
+};
+
+export type MyBarData = {
+  ingredients: MyBarIngredient[];
+  makeableCocktails: MakeableCocktailSummary[];
+};
+
 export type CocktailInput = {
   name: string;
   baseSpirit: string;
@@ -158,4 +173,18 @@ export async function setCocktailStar(id: number, isStarred: boolean): Promise<v
 export async function getDashboardStats(): Promise<DashboardStats> {
   const result = await apiRequest<{ stats: DashboardStats }>("/api/dashboard");
   return result.stats;
+}
+
+export async function getMyBar(): Promise<MyBarData> {
+  return apiRequest<MyBarData>("/api/my-bar");
+}
+
+export async function setBarItem(
+  ingredientId: number,
+  inBar: boolean,
+): Promise<{ inBar: boolean; makeableCocktails: MakeableCocktailSummary[] }> {
+  return apiRequest(`/api/my-bar/${ingredientId}`, {
+    method: "PUT",
+    body: JSON.stringify({ inBar }),
+  });
 }

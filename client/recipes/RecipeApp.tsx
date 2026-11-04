@@ -16,15 +16,20 @@ import {
   CocktailSort,
   CocktailSummary,
   DashboardStats,
+  MakeableCocktailSummary,
   IngredientRowFieldErrors,
   Ingredient,
+  MyBarData,
+  MyBarIngredient,
   createCocktail,
   deleteCocktail,
   getCocktail,
   getCocktails,
   getDashboardStats,
   getIngredients,
+  getMyBar,
   setCocktailStar,
+  setBarItem,
   updateCocktail,
 } from "../recipeApi.js";
 import "./recipes.css";
@@ -32,6 +37,7 @@ import "./recipes.css";
 type RecipeRoute =
   | { page: "list"; starred?: boolean }
   | { page: "dashboard" }
+  | { page: "myBar" }
   | { page: "new" }
   | { page: "detail"; id: number }
   | { page: "edit"; id: number };
@@ -44,6 +50,7 @@ type RecipeAppProps = {
 function routeFromPath(pathname: string): RecipeRoute {
   if (pathname === "/starred" || pathname === "/starred/") return { page: "list", starred: true };
   if (pathname === "/dashboard" || pathname === "/dashboard/") return { page: "dashboard" };
+  if (pathname === "/my-bar" || pathname === "/my-bar/") return { page: "myBar" };
   if (pathname === "/cocktails/new") return { page: "new" };
   const match = pathname.match(/^\/cocktails\/(\d+)(\/edit)?\/?$/);
   if (match) {
@@ -56,6 +63,7 @@ function routeFromPath(pathname: string): RecipeRoute {
 function recipePath(route: RecipeRoute): string {
   if (route.page === "list") return route.starred ? "/starred" : "/";
   if (route.page === "dashboard") return "/dashboard";
+  if (route.page === "myBar") return "/my-bar";
   if (route.page === "new") return "/cocktails/new";
   return `/cocktails/${route.id}${route.page === "edit" ? "/edit" : ""}`;
 }
@@ -112,6 +120,14 @@ export function RecipeApp({ displayName, onLogout }: RecipeAppProps) {
           >
             Dashboard
           </a>
+          <a
+            aria-current={route.page === "myBar" ? "page" : undefined}
+            className={route.page === "myBar" ? "is-active" : ""}
+            href="/my-bar"
+            onClick={(event) => handleLink(event, { page: "myBar" })}
+          >
+            My Bar
+          </a>
         </nav>
         <div className="recipe-account">
           <span>{displayName}&apos;s Bar</span>
@@ -128,6 +144,7 @@ export function RecipeApp({ displayName, onLogout }: RecipeAppProps) {
           />
         )}
         {route.page === "dashboard" && <DashboardPage />}
+        {route.page === "myBar" && <MyBarPage navigate={navigate} handleLink={handleLink} />}
         {route.page === "detail" && (
           <RecipeDetail id={route.id} navigate={navigate} handleLink={handleLink} />
         )}
@@ -238,6 +255,181 @@ function DashboardPage() {
                 </BarChart>
               </ResponsiveContainer>
             </div>
+          </section>
+        </>
+      )}
+    </section>
+  );
+}
+
+const barCategoryOrder = ["spirit", "liqueur", "juice", "syrup", "bitters", "garnish", "other"] as const;
+
+const barCategoryLabels: Record<(typeof barCategoryOrder)[number], string> = {
+  spirit: "Spirit",
+  liqueur: "Liqueur",
+  juice: "Juice",
+  syrup: "Syrup",
+  bitters: "Bitters",
+  garnish: "Garnish",
+  other: "Other",
+};
+
+function MyBarPage({
+  navigate,
+  handleLink,
+}: {
+  navigate: (route: RecipeRoute) => void;
+  handleLink: (event: React.MouseEvent<HTMLAnchorElement>, route: RecipeRoute) => void;
+}) {
+  const [barData, setBarData] = useState<MyBarData | null>(null);
+  const [search, setSearch] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    setError("");
+    setBarData(null);
+    getMyBar()
+      .then((result) => { if (active) setBarData(result); })
+      .catch((caught: unknown) => {
+        if (active) setError(caught instanceof Error ? caught.message : "Your bar could not be loaded.");
+      });
+    return () => { active = false; };
+  }, [reloadKey]);
+
+  async function toggleIngredient(ingredient: MyBarIngredient) {
+    const inBar = !ingredient.inBar;
+    setError("");
+    setSaving(true);
+    setBarData((current) => current && ({
+      ...current,
+      ingredients: current.ingredients.map((item) =>
+        item.id === ingredient.id ? { ...item, inBar } : item,
+      ),
+    }));
+    try {
+      const result = await setBarItem(ingredient.id, inBar);
+      setBarData((current) => current && ({
+        ...current,
+        makeableCocktails: result.makeableCocktails,
+      }));
+    } catch (caught) {
+      setBarData((current) => current && ({
+        ...current,
+        ingredients: current.ingredients.map((item) =>
+          item.id === ingredient.id ? { ...item, inBar: ingredient.inBar } : item,
+        ),
+      }));
+      setError(caught instanceof Error ? caught.message : "Your bar could not be updated.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const filteredIngredients = (barData?.ingredients ?? []).filter((ingredient) =>
+    ingredient.name.toLowerCase().includes(search.trim().toLowerCase()),
+  );
+  const ingredientGroups = barCategoryOrder
+    .map((category) => ({
+      category,
+      ingredients: filteredIngredients.filter((ingredient) => ingredient.category === category),
+    }))
+    .filter((group) => group.ingredients.length > 0);
+
+  return (
+    <section className="my-bar-page" aria-labelledby="my-bar-heading">
+      <div className="recipe-page-heading">
+        <div>
+          <p className="recipe-eyebrow">YOUR HOME BAR</p>
+          <h1 id="my-bar-heading">My Bar</h1>
+        </div>
+      </div>
+      <label className="my-bar-search">
+        <span className="sr-only">Search ingredients</span>
+        <input
+          type="search"
+          placeholder="Search ingredients"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+        />
+      </label>
+      {error && (
+        <div className="recipe-message recipe-error" role="alert">
+          <p>{error}</p>
+          {barData === null && (
+            <button
+              className="recipe-text-action"
+              type="button"
+              onClick={() => setReloadKey((current) => current + 1)}
+            >
+              Try again
+            </button>
+          )}
+        </div>
+      )}
+      {barData === null ? (
+        <div className="recipe-skeleton my-bar-skeleton" aria-label="Loading ingredients" aria-live="polite">
+          <span /><span /><span />
+        </div>
+      ) : (
+        <>
+          <div className="my-bar-categories">
+            {ingredientGroups.map((group) => (
+              <section className="my-bar-category" key={group.category} aria-labelledby={`bar-${group.category}-heading`}>
+                <h2 id={`bar-${group.category}-heading`}>{barCategoryLabels[group.category]}</h2>
+                <ul className="my-bar-ingredient-list">
+                  {group.ingredients.map((ingredient) => (
+                    <li key={ingredient.id}>
+                      <label>
+                        <input
+                          checked={ingredient.inBar}
+                          disabled={saving}
+                          onChange={() => void toggleIngredient(ingredient)}
+                          type="checkbox"
+                        />
+                        <span>{ingredient.name}</span>
+                      </label>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ))}
+            {filteredIngredients.length === 0 && (
+              <p className="my-bar-no-results" role="status">No ingredients match that search.</p>
+            )}
+          </div>
+          <section className="my-bar-makeable" aria-labelledby="makeable-heading">
+            <div className="my-bar-makeable-heading">
+              <div>
+                <p className="recipe-eyebrow">USING WHAT YOU HAVE</p>
+                <h2 id="makeable-heading">What can I make?</h2>
+              </div>
+              <p className="my-bar-makeable-count" aria-live="polite">
+                You can make {barData.makeableCocktails.length} {barData.makeableCocktails.length === 1 ? "drink" : "drinks"}.
+              </p>
+            </div>
+            {barData.makeableCocktails.length > 0 ? (
+              <ul className="my-bar-recipe-list">
+                {barData.makeableCocktails.map((cocktail: MakeableCocktailSummary) => (
+                  <li key={cocktail.id}>
+                    <a
+                      href={`/cocktails/${cocktail.id}`}
+                      onClick={(event) => handleLink(event, { page: "detail", id: cocktail.id })}
+                    >
+                      <span>
+                        <strong>{cocktail.name}</strong>
+                        <small>{cocktail.baseSpirit}</small>
+                      </span>
+                      <span className="my-bar-recipe-arrow" aria-hidden="true">↗</span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="my-bar-empty">Add ingredients to your bar to see which recipes you can make.</p>
+            )}
           </section>
         </>
       )}

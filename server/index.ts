@@ -157,6 +157,61 @@ async function missingIngredientIds(rows: CocktailInput["ingredients"]): Promise
   return new Set(ids.filter((id) => !available.has(id)));
 }
 
+export type MakeableCocktail = {
+  id: number;
+  name: string;
+  baseSpirit: string;
+  rating: number;
+  ingredients: Array<{ ingredientId: number; name: string }>;
+};
+
+export async function getMakeableCocktails(userId: number): Promise<MakeableCocktail[]> {
+  const allIngredientsInBar = sql`
+    not exists (
+      select 1
+      from ${cocktailIngredients} as ci
+      where ci.cocktail_id = ${cocktails.id}
+        and not exists (
+          select 1
+          from ${barItems} as bi
+          where bi.user_id = ${userId}
+            and bi.ingredient_id = ci.ingredient_id
+        )
+    )
+  `;
+  const rows = await db
+    .select({
+      id: cocktails.id,
+      name: cocktails.name,
+      baseSpirit: cocktails.baseSpirit,
+      rating: cocktails.rating,
+      ingredientId: cocktailIngredients.ingredientId,
+      ingredientName: ingredients.name,
+    })
+    .from(cocktails)
+    .innerJoin(cocktailIngredients, eq(cocktailIngredients.cocktailId, cocktails.id))
+    .innerJoin(ingredients, eq(ingredients.id, cocktailIngredients.ingredientId))
+    .where(and(eq(cocktails.userId, userId), allIngredientsInBar))
+    .orderBy(asc(cocktails.name), asc(cocktails.id), asc(cocktailIngredients.id));
+
+  const makeable = new Map<number, MakeableCocktail>();
+  for (const row of rows) {
+    let cocktail = makeable.get(row.id);
+    if (!cocktail) {
+      cocktail = {
+        id: row.id,
+        name: row.name,
+        baseSpirit: row.baseSpirit,
+        rating: row.rating,
+        ingredients: [],
+      };
+      makeable.set(row.id, cocktail);
+    }
+    cocktail.ingredients.push({ ingredientId: row.ingredientId, name: row.ingredientName });
+  }
+  return [...makeable.values()];
+}
+
 export type DashboardStats = {
   totalRecipes: number;
   averageRating: number | null;
@@ -166,7 +221,7 @@ export type DashboardStats = {
 };
 
 export async function getDashboardStats(userId: number): Promise<DashboardStats> {
-  const [summaryRows, starredRows, spiritRows, barRows] = await Promise.all([
+  const [summaryRows, starredRows, spiritRows, makeableCocktails] = await Promise.all([
     db
       .select({
         totalRecipes: sql<number>`count(*)::int`,
@@ -190,10 +245,7 @@ export async function getDashboardStats(userId: number): Promise<DashboardStats>
       .from(cocktails)
       .where(eq(cocktails.userId, userId))
       .groupBy(cocktails.baseSpirit),
-    db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(barItems)
-      .where(eq(barItems.userId, userId)),
+    getMakeableCocktails(userId),
   ]);
 
   const summary = summaryRows[0];
@@ -207,39 +259,11 @@ export async function getDashboardStats(userId: number): Promise<DashboardStats>
     count: spiritCounts.get(baseSpirit) ?? 0,
   }));
 
-  let canMakeNow = 0;
-  if (Number(barRows[0]?.count ?? 0) > 0) {
-    const hasIngredients = exists(
-      db
-        .select({ id: cocktailIngredients.id })
-        .from(cocktailIngredients)
-        .where(eq(cocktailIngredients.cocktailId, cocktails.id)),
-    );
-    const hasNoMissingIngredients = sql`
-      not exists (
-        select 1
-        from ${cocktailIngredients} as ci
-        where ci.cocktail_id = ${cocktails.id}
-          and not exists (
-            select 1
-            from ${barItems} as bi
-            where bi.user_id = ${userId}
-              and bi.ingredient_id = ci.ingredient_id
-          )
-      )
-    `;
-    const [canMakeRow] = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(cocktails)
-      .where(and(eq(cocktails.userId, userId), hasIngredients, hasNoMissingIngredients));
-    canMakeNow = Number(canMakeRow?.count ?? 0);
-  }
-
   return {
     totalRecipes,
     averageRating,
     starredRecipes: Number(starredRows[0]?.count ?? 0),
-    canMakeNow,
+    canMakeNow: makeableCocktails.length,
     recipesByBaseSpirit,
   };
 }
@@ -357,6 +381,76 @@ app.get("/api/dashboard", requireUser, async (req, res, next) => {
   try {
     const stats = await getDashboardStats(req.session.userId!);
     res.json({ stats });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/my-bar", requireUser, async (req, res, next) => {
+  try {
+    const userId = req.session.userId!;
+    const [ingredientRows, makeableCocktails] = await Promise.all([
+      db
+        .select({
+          id: ingredients.id,
+          name: ingredients.name,
+          category: ingredients.category,
+          barIngredientId: barItems.ingredientId,
+        })
+        .from(ingredients)
+        .leftJoin(
+          barItems,
+          and(eq(barItems.ingredientId, ingredients.id), eq(barItems.userId, userId)),
+        )
+        .orderBy(asc(ingredients.name)),
+      getMakeableCocktails(userId),
+    ]);
+
+    res.json({
+      ingredients: ingredientRows.map(({ barIngredientId, ...ingredient }) => ({
+        ...ingredient,
+        inBar: barIngredientId !== null,
+      })),
+      makeableCocktails,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/my-bar/:ingredientId", requireUser, async (req, res, next) => {
+  const ingredientId = parseCocktailId(req.params.ingredientId);
+  if (ingredientId === null) {
+    res.status(404).json({ error: "Ingredient not found." });
+    return;
+  }
+  if (typeof req.body?.inBar !== "boolean") {
+    res.status(400).json({ error: "Choose whether this ingredient is in your bar." });
+    return;
+  }
+
+  const userId = req.session.userId!;
+  try {
+    const [ingredient] = await db
+      .select({ id: ingredients.id })
+      .from(ingredients)
+      .where(eq(ingredients.id, ingredientId))
+      .limit(1);
+    if (!ingredient) {
+      res.status(404).json({ error: "Ingredient not found." });
+      return;
+    }
+
+    if (req.body.inBar) {
+      await db.insert(barItems).values({ userId, ingredientId }).onConflictDoNothing();
+    } else {
+      await db
+        .delete(barItems)
+        .where(and(eq(barItems.userId, userId), eq(barItems.ingredientId, ingredientId)));
+    }
+
+    const makeableCocktails = await getMakeableCocktails(userId);
+    res.json({ inBar: req.body.inBar, makeableCocktails });
   } catch (error) {
     next(error);
   }

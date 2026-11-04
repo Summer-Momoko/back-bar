@@ -12,12 +12,13 @@ import {
   getCocktail,
   getCocktails,
   getIngredients,
+  setCocktailStar,
   updateCocktail,
 } from "../recipeApi.js";
 import "./recipes.css";
 
 type RecipeRoute =
-  | { page: "list" }
+  | { page: "list"; starred?: boolean }
   | { page: "new" }
   | { page: "detail"; id: number }
   | { page: "edit"; id: number };
@@ -28,6 +29,7 @@ type RecipeAppProps = {
 };
 
 function routeFromPath(pathname: string): RecipeRoute {
+  if (pathname === "/starred" || pathname === "/starred/") return { page: "list", starred: true };
   if (pathname === "/cocktails/new") return { page: "new" };
   const match = pathname.match(/^\/cocktails\/(\d+)(\/edit)?\/?$/);
   if (match) {
@@ -38,7 +40,7 @@ function routeFromPath(pathname: string): RecipeRoute {
 }
 
 function recipePath(route: RecipeRoute): string {
-  if (route.page === "list") return "/";
+  if (route.page === "list") return route.starred ? "/starred" : "/";
   if (route.page === "new") return "/cocktails/new";
   return `/cocktails/${route.id}${route.page === "edit" ? "/edit" : ""}`;
 }
@@ -93,7 +95,13 @@ export function RecipeApp({ displayName, onLogout }: RecipeAppProps) {
       </header>
       {logoutError && <p className="recipe-toast" role="alert">{logoutError}</p>}
       <main className="recipe-main">
-        {route.page === "list" && <RecipeList navigate={navigate} handleLink={handleLink} />}
+        {route.page === "list" && (
+          <RecipeList
+            starredOnly={Boolean(route.starred)}
+            navigate={navigate}
+            handleLink={handleLink}
+          />
+        )}
         {route.page === "detail" && (
           <RecipeDetail id={route.id} navigate={navigate} handleLink={handleLink} />
         )}
@@ -104,33 +112,109 @@ export function RecipeApp({ displayName, onLogout }: RecipeAppProps) {
   );
 }
 
+function StarToggleButton({
+  name,
+  isStarred,
+  disabled,
+  className = "",
+  onToggle,
+}: {
+  name: string;
+  isStarred: boolean;
+  disabled?: boolean;
+  className?: string;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      aria-label={`${isStarred ? "Remove" : "Add"} ${name} ${isStarred ? "from" : "to"} Starred`}
+      aria-pressed={isStarred}
+      className={`recipe-star-toggle${isStarred ? " is-starred" : ""}${className ? ` ${className}` : ""}`}
+      disabled={disabled}
+      onClick={onToggle}
+      type="button"
+    >
+      <svg aria-hidden="true" viewBox="0 0 24 24">
+        <path d="m12 3.6 2.55 5.17 5.7.83-4.12 4.02.97 5.68L12 16.62l-5.1 2.68.97-5.68-4.12-4.02 5.7-.83L12 3.6Z" />
+      </svg>
+    </button>
+  );
+}
+
 function RecipeList({
   navigate,
   handleLink,
+  starredOnly,
 }: {
   navigate: (route: RecipeRoute) => void;
   handleLink: (event: React.MouseEvent<HTMLAnchorElement>, route: RecipeRoute) => void;
+  starredOnly: boolean;
 }) {
   const [recipes, setRecipes] = useState<CocktailSummary[] | null>(null);
   const [error, setError] = useState("");
+  const [starError, setStarError] = useState("");
+  const [pendingStarIds, setPendingStarIds] = useState<Set<number>>(new Set());
 
   async function load() {
     setError("");
+    setRecipes(null);
     try {
-      setRecipes(await getCocktails());
+      setRecipes(await getCocktails(starredOnly));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Your recipes could not be loaded.");
     }
   }
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); }, [starredOnly]);
+
+  async function toggleStar(recipe: CocktailSummary) {
+    const isStarred = !recipe.isStarred;
+    setStarError("");
+    setPendingStarIds((current) => new Set(current).add(recipe.id));
+    try {
+      await setCocktailStar(recipe.id, isStarred);
+      setRecipes((current) => {
+        if (!current) return current;
+        if (starredOnly && !isStarred) return current.filter((item) => item.id !== recipe.id);
+        return current.map((item) => item.id === recipe.id ? { ...item, isStarred } : item);
+      });
+    } catch (caught) {
+      setStarError(caught instanceof Error ? caught.message : "This recipe could not be updated.");
+    } finally {
+      setPendingStarIds((current) => {
+        const next = new Set(current);
+        next.delete(recipe.id);
+        return next;
+      });
+    }
+  }
 
   return (
     <section className="recipe-list-page" aria-labelledby="list-heading">
       <div className="recipe-page-heading">
         <div>
           <p className="recipe-eyebrow">YOUR PERSONAL RECIPE BOX</p>
-          <h1 id="list-heading">My recipes</h1>
+          <div className="recipe-title-tabs">
+            <h1 id="list-heading">{starredOnly ? "Starred" : "My recipes"}</h1>
+            <nav className="recipe-view-tabs" aria-label="Recipe views">
+              <a
+                aria-current={!starredOnly ? "page" : undefined}
+                className={!starredOnly ? "recipe-view-tab is-active" : "recipe-view-tab"}
+                href="/"
+                onClick={(event) => handleLink(event, { page: "list" })}
+              >
+                My recipes
+              </a>
+              <a
+                aria-current={starredOnly ? "page" : undefined}
+                className={starredOnly ? "recipe-view-tab is-active" : "recipe-view-tab"}
+                href="/starred"
+                onClick={(event) => handleLink(event, { page: "list", starred: true })}
+              >
+                Starred
+              </a>
+            </nav>
+          </div>
         </div>
         <a
           className="recipe-primary-link"
@@ -151,36 +235,46 @@ function RecipeList({
         </div>
       ) : recipes.length === 0 ? (
         <div className="recipe-empty">
-          <span className="recipe-empty-mark" aria-hidden="true">+</span>
-          <h2>A good place to start.</h2>
-          <p>Save a drink you’ve enjoyed, and keep the recipe close for next time.</p>
-          <button className="recipe-primary-button" type="button" onClick={() => navigate({ page: "new" })}>
-             Add recipe
-          </button>
+          <span className="recipe-empty-mark" aria-hidden="true">{starredOnly ? "☆" : "+"}</span>
+          <h2>{starredOnly ? "Nothing starred yet." : "A good place to start."}</h2>
+          <p>{starredOnly ? "Star a recipe to keep it here." : "Save a drink you’ve enjoyed, and keep the recipe close for next time."}</p>
+          {!starredOnly && (
+            <button className="recipe-primary-button" type="button" onClick={() => navigate({ page: "new" })}>
+              Add recipe
+            </button>
+          )}
         </div>
       ) : (
         <div className="recipe-table" role="list" aria-label="Your cocktail recipes">
           {recipes.map((recipe) => (
-            <a
-              className="recipe-row"
-              href={`/cocktails/${recipe.id}`}
-              key={recipe.id}
-              role="listitem"
-              onClick={(event) => handleLink(event, { page: "detail", id: recipe.id })}
-            >
-              <span className="recipe-row-main">
-                <span className="recipe-row-name">{recipe.name}</span>
-                <span className="recipe-row-subtitle">{recipe.baseSpirit || "—"}</span>
-              </span>
-              <span className="recipe-row-rating">{recipe.rating} / 5</span>
-              <span className="recipe-row-ingredients">
-                {recipe.ingredients.map((item) => item.name).join(", ") || "No ingredients yet"}
-              </span>
-              <span className="recipe-row-arrow" aria-hidden="true">↗</span>
-            </a>
+            <div className="recipe-row" key={recipe.id} role="listitem">
+              <a
+                className="recipe-row-link"
+                href={`/cocktails/${recipe.id}`}
+                onClick={(event) => handleLink(event, { page: "detail", id: recipe.id })}
+              >
+                <span className="recipe-row-main">
+                  <span className="recipe-row-name">{recipe.name}</span>
+                  <span className="recipe-row-subtitle">{recipe.baseSpirit || "—"}</span>
+                </span>
+                <span className="recipe-row-rating">{recipe.rating} / 5</span>
+                <span className="recipe-row-ingredients">
+                  {recipe.ingredients.map((item) => item.name).join(", ") || "No ingredients yet"}
+                </span>
+                <span className="recipe-row-arrow" aria-hidden="true">↗</span>
+              </a>
+              <StarToggleButton
+                className="recipe-row-star"
+                disabled={pendingStarIds.has(recipe.id)}
+                isStarred={recipe.isStarred}
+                name={recipe.name}
+                onToggle={() => void toggleStar(recipe)}
+              />
+            </div>
           ))}
         </div>
       )}
+      {starError && <p className="recipe-inline-error" role="alert">{starError}</p>}
     </section>
   );
 }
@@ -198,6 +292,8 @@ function RecipeDetail({
   const [error, setError] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
+  const [starSaving, setStarSaving] = useState(false);
+  const [starError, setStarError] = useState("");
 
   async function load() {
     setError("");
@@ -225,6 +321,21 @@ function RecipeDetail({
     }
   }
 
+  async function toggleStar() {
+    if (!cocktail || starSaving) return;
+    const isStarred = !cocktail.isStarred;
+    setStarSaving(true);
+    setStarError("");
+    try {
+      await setCocktailStar(id, isStarred);
+      setCocktail((current) => current ? { ...current, isStarred } : current);
+    } catch (caught) {
+      setStarError(caught instanceof Error ? caught.message : "This recipe could not be updated.");
+    } finally {
+      setStarSaving(false);
+    }
+  }
+
   if (error) {
     return (
       <div className="recipe-message recipe-error" role="alert">
@@ -247,6 +358,13 @@ function RecipeDetail({
           <h1>{cocktail.name}</h1>
         </div>
         <div className="recipe-detail-actions">
+          <StarToggleButton
+            className="recipe-detail-star"
+            disabled={starSaving}
+            isStarred={cocktail.isStarred}
+            name={cocktail.name}
+            onToggle={() => void toggleStar()}
+          />
           <a
             className="recipe-outline-link"
             href={`/cocktails/${id}/edit`}
@@ -259,6 +377,7 @@ function RecipeDetail({
           </button>
         </div>
       </div>
+      {starError && <p className="recipe-inline-error" role="alert">{starError}</p>}
       {deleteError && <p className="recipe-inline-error" role="alert">{deleteError}</p>}
       <div className="recipe-detail-meta">
         <div><span>Glass</span><strong>{cocktail.glass || "Not specified"}</strong></div>

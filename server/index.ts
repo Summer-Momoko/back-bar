@@ -7,7 +7,7 @@ import { createServer as createHttpServer } from "node:http";
 import { join, resolve } from "node:path";
 import { createServer as createViteServer } from "vite";
 import { db, pool } from "../db/index.js";
-import { cocktailIngredients, cocktails, ingredients, stars, users } from "../db/schema.js";
+import { barItems, cocktailIngredients, cocktails, ingredients, stars, users } from "../db/schema.js";
 
 const app = express();
 const port = Number(process.env.PORT ?? 5000);
@@ -157,6 +157,93 @@ async function missingIngredientIds(rows: CocktailInput["ingredients"]): Promise
   return new Set(ids.filter((id) => !available.has(id)));
 }
 
+export type DashboardStats = {
+  totalRecipes: number;
+  averageRating: number | null;
+  starredRecipes: number;
+  canMakeNow: number;
+  recipesByBaseSpirit: Array<{ baseSpirit: string; count: number }>;
+};
+
+export async function getDashboardStats(userId: number): Promise<DashboardStats> {
+  const [summaryRows, starredRows, spiritRows, barRows] = await Promise.all([
+    db
+      .select({
+        totalRecipes: sql<number>`count(*)::int`,
+        averageRating: sql<number | string | null>`avg(${cocktails.rating})`,
+      })
+      .from(cocktails)
+      .where(eq(cocktails.userId, userId)),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(stars)
+      .innerJoin(
+        cocktails,
+        and(eq(cocktails.id, stars.cocktailId), eq(cocktails.userId, userId)),
+      )
+      .where(eq(stars.userId, userId)),
+    db
+      .select({
+        baseSpirit: cocktails.baseSpirit,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(cocktails)
+      .where(eq(cocktails.userId, userId))
+      .groupBy(cocktails.baseSpirit),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(barItems)
+      .where(eq(barItems.userId, userId)),
+  ]);
+
+  const summary = summaryRows[0];
+  const totalRecipes = Number(summary?.totalRecipes ?? 0);
+  const averageRating = summary?.averageRating == null
+    ? null
+    : Number(Number(summary.averageRating).toFixed(1));
+  const spiritCounts = new Map(spiritRows.map((row) => [row.baseSpirit, Number(row.count)]));
+  const recipesByBaseSpirit = [...BASE_SPIRITS].map((baseSpirit) => ({
+    baseSpirit,
+    count: spiritCounts.get(baseSpirit) ?? 0,
+  }));
+
+  let canMakeNow = 0;
+  if (Number(barRows[0]?.count ?? 0) > 0) {
+    const hasIngredients = exists(
+      db
+        .select({ id: cocktailIngredients.id })
+        .from(cocktailIngredients)
+        .where(eq(cocktailIngredients.cocktailId, cocktails.id)),
+    );
+    const hasNoMissingIngredients = sql`
+      not exists (
+        select 1
+        from ${cocktailIngredients} as ci
+        where ci.cocktail_id = ${cocktails.id}
+          and not exists (
+            select 1
+            from ${barItems} as bi
+            where bi.user_id = ${userId}
+              and bi.ingredient_id = ci.ingredient_id
+          )
+      )
+    `;
+    const [canMakeRow] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(cocktails)
+      .where(and(eq(cocktails.userId, userId), hasIngredients, hasNoMissingIngredients));
+    canMakeNow = Number(canMakeRow?.count ?? 0);
+  }
+
+  return {
+    totalRecipes,
+    averageRating,
+    starredRecipes: Number(starredRows[0]?.count ?? 0),
+    canMakeNow,
+    recipesByBaseSpirit,
+  };
+}
+
 app.post("/api/auth/signup", async (req, res, next) => {
   const displayName =
     typeof req.body?.displayName === "string" ? req.body.displayName.trim() : "";
@@ -264,6 +351,15 @@ app.post("/api/auth/logout", requireUser, (req, res, next) => {
     });
     res.status(204).end();
   });
+});
+
+app.get("/api/dashboard", requireUser, async (req, res, next) => {
+  try {
+    const stats = await getDashboardStats(req.session.userId!);
+    res.json({ stats });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get("/api/ingredients", requireUser, async (_req, res, next) => {

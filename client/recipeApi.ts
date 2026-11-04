@@ -41,6 +41,14 @@ export type Cocktail = {
   ingredients: CocktailIngredient[];
 };
 
+export type DashboardStats = {
+  totalRecipes: number;
+  averageRating: number | null;
+  starredRecipes: number;
+  canMakeNow: number;
+  recipesByBaseSpirit: Array<{ baseSpirit: string; count: number }>;
+};
+
 export type CocktailInput = {
   name: string;
   baseSpirit: string;
@@ -145,4 +153,9 @@ export async function setCocktailStar(id: number, isStarred: boolean): Promise<v
     method: "PUT",
     body: JSON.stringify({ isStarred }),
   });
+}
+
+export async function getDashboardStats(): Promise<DashboardStats> {
+  const result = await apiRequest<{ stats: DashboardStats }>("/api/dashboard");
+  return result.stats;
 }
